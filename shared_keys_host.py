@@ -120,7 +120,7 @@ class SharedKeysHost:
             else:
                 new |= shared_keys
         if path not in self.shared_keys:
-            new = received_keys
+            new |= received_keys
         self.shared_keys[path] = received_keys
         if current != new:
             self.send_shared_keys_report()
