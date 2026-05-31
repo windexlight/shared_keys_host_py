@@ -58,6 +58,7 @@ class SharedKeysHost:
                         dev.open_path(path)
                         dev.set_nonblocking(False)
                         self.devs[path] = dev
+                        self.send_shared_keys_report()
                         dev.write(self.get_shared_keys_report)
                         tg.create_task(self.read_loop(path, dev))
                         logging.info(f"Connected to {path}")
