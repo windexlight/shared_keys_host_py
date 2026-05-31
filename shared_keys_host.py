@@ -4,6 +4,10 @@ import sys
 import signal
 from dataclasses import dataclass
 import logging
+import ctypes
+
+def is_scroll_lock_on():
+    return bool(ctypes.windll.user32.GetKeyState(0x91) & 1)
 
 logging.basicConfig(
     filename="shared_keys_host.log",
@@ -72,8 +76,8 @@ class SharedKeysHost:
             while not shutdown_event.is_set():
                 if not self.process_raw_hid_report(path, await asyncio.to_thread(device.read, RAW_HID_REPORT_LEN, 500)): # 500ms timeout
                     break
-        except:
-            pass
+        except Exception as e:
+            logging.exception(f"Read loop terminating due to exception: {e}")
         finally:
             try:
                 self.devs[path].close()
@@ -108,6 +112,12 @@ class SharedKeysHost:
                 if report[0] == 0xC0:
                     self.process_shared_keys_report(path, report[1:])
                     return True
+                else:
+                    logging.error(f"Read loop terminating due to non-C0 report: {report}")
+            else:
+                logging.error(f"Read loop terminating due to non-RAW_HID_REPORT_LEN report: {report}")
+        else:
+            logging.error(f"Read loop terminating due to no report: {report}")
         return False
 
     def process_shared_keys_report(self, path, report):
@@ -134,7 +144,7 @@ class SharedKeysHost:
         s = ""
         for byte in self.report_data[2 : 6]:
             s += f"{byte:08b} "
-        logging.info(s[:-1])
+        logging.info(f"SL: {is_scroll_lock_on()}, {s[:-1]}")
         for dev in self.devs.values():
             try:
                 dev.write(bytes(self.report_data))
