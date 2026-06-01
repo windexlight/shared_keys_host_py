@@ -108,9 +108,9 @@ class SharedKeysHost:
                     last_send_time = time()
                 except Exception as e:
                     logging.exception(f"Exception during write to {path} (last_send_time: {time()-last_send_time:.2f}): {e}")
-                took = write_start - time()
+                took = time() - write_start
                 if (took) > 0.5:
-                    logging.warning(f"Write took a long time: {took}")
+                    logging.warning(f"Write took a long time (heartbeat_loop): {took}")
             try:
                 await asyncio.wait_for(shutdown_event.wait(), timeout=0.2)
             except TimeoutError:
@@ -159,11 +159,15 @@ class SharedKeysHost:
         for byte in self.report_data[2 : 6]:
             s += f"{byte:08b} "
         logging.info(f"SL: {is_scroll_lock_on()}, {s[:-1]}")
-        for dev in self.devs.values():
+        for path, dev in self.devs.items():
             try:
+                write_start = time()
                 dev.write(bytes(self.report_data))
-            except:
-                pass
+                took = time() - write_start
+                if (took) > 0.5:
+                    logging.warning(f"Write took a long time (send_shared_keys_report): {took}")
+            except Exception as e:
+                logging.exception(f"Exception during write to {path} (last_send_time: {time()-last_send_time:.2f}): {e}")
 
 
 if __name__ == "__main__":
