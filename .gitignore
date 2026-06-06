@@ -1,0 +1,3 @@
+__pycache__/
+.venv/
+shared_keys_host.log
