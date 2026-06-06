@@ -6,18 +6,25 @@ from dataclasses import dataclass
 import logging
 import ctypes
 from time import time
+import win32gui
 
 last_send_time = 0
 
-def is_scroll_lock_on():
-    return bool(ctypes.windll.user32.GetKeyState(0x91) & 1)
+def setup_logger():
+    logger = logging.getLogger("app_logger")
+    logger.setLevel(logging.DEBUG)
+    log_format = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.DEBUG)
+    console_handler.setFormatter(log_format)
+    file_handler = logging.FileHandler("shared_keys_host.log", mode="a", encoding="utf-8")
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(log_format)
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+    return logger
 
-logging.basicConfig(
-    filename="shared_keys_host.log",
-    filemode="a",
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
+logger = setup_logger()
 
 shutdown_event = asyncio.Event()
 
@@ -68,7 +75,7 @@ class SharedKeysHost:
                         self.send_shared_keys_report()
                         dev.write(self.get_shared_keys_report)
                         tg.create_task(self.read_loop(path, dev))
-                        logging.info(f"Connected to {path}")
+                        logger.info(f"Connected to {path}")
                 try:
                     await asyncio.wait_for(shutdown_event.wait(), timeout=0.5)
                 except TimeoutError:
@@ -78,13 +85,10 @@ class SharedKeysHost:
         last_report_time = 0
         try:
             while not shutdown_event.is_set():
-                if not self.process_raw_hid_report(path, last_report_time, await asyncio.to_thread(device.read, RAW_HID_REPORT_LEN, 500)): # 500ms timeout
-                    logging.error(f"Device error: {device.error()}")
-                    break
-                else:
-                    last_report_time = time()
+                self.process_raw_hid_report(path, last_report_time, await asyncio.to_thread(device.read, RAW_HID_REPORT_LEN))
+                last_report_time = time()
         except Exception as e:
-            logging.exception(f"Read loop terminating due to exception (last_report_time: {time()-last_report_time:.2f}, last_send_time: {time()-last_send_time:.2f}): {e}")
+            logger.exception(f"Read loop terminating due to exception (last_report_time: {time()-last_report_time:.2f}, last_send_time: {time()-last_send_time:.2f}): {e}")
         finally:
             try:
                 self.devs[path].close()
@@ -95,7 +99,7 @@ class SharedKeysHost:
             if path in self.shared_keys:
                 self.process_shared_keys_report(path, [0] * 4)
                 del self.shared_keys[path]
-            logging.info(f"Disconnected from {path}")
+            logger.info(f"Disconnected from {path}")
 
     async def heartbeat_loop(self):
         global last_send_time
@@ -104,35 +108,27 @@ class SharedKeysHost:
                 try:
                     write_start = time()
                     if dev.write(bytes(self.get_shared_keys_report)) < 0:
-                        logging.error(f"Write to {path} returned error (last_send_time: {time()-last_send_time:.2f}): {dev.error()}")
+                        logger.error(f"Write to {path} returned error (last_send_time: {time()-last_send_time:.2f}): {dev.error()}")
                     last_send_time = time()
                 except Exception as e:
-                    logging.exception(f"Exception during write to {path} (last_send_time: {time()-last_send_time:.2f}): {e}")
+                    logger.exception(f"Exception during write to {path} (last_send_time: {time()-last_send_time:.2f}): {e}")
                 took = time() - write_start
                 if (took) > 0.5:
-                    logging.warning(f"Write took a long time (heartbeat_loop): {took}")
+                    logger.warning(f"Write took a long time (heartbeat_loop): {took}")
             try:
-                await asyncio.wait_for(shutdown_event.wait(), timeout=0.2)
+                await asyncio.wait_for(shutdown_event.wait(), timeout=1.0)
             except TimeoutError:
                 pass
 
-    def process_raw_hid_report(self, path, last_report_time, report) -> bool:
+    def process_raw_hid_report(self, path, last_report_time, report):
         if report:
             # s = ""
             # for byte in report[1 : 5]:
             #     s += f"{byte:08b} "
-            # logging.info(f"{path}: {s[:-1]}")
+            # logger.info(f"{path}: {s[:-1]}")
             if len(report) == RAW_HID_REPORT_LEN:
                 if report[0] == 0xC0:
                     self.process_shared_keys_report(path, report[1:])
-                    return True
-                else:
-                    logging.error(f"Read loop terminating due to non-C0 report (last_report_time: {time()-last_report_time:.2f}, last_send_time: {time()-last_send_time:.2f}): {report}")
-            else:
-                logging.error(f"Read loop terminating due to non-RAW_HID_REPORT_LEN report (last_report_time: {time()-last_report_time:.2f}, last_send_time: {time()-last_send_time:.2f}): {report}")
-        else:
-            logging.error(f"Read loop terminating due to no report (last_report_time: {time()-last_report_time:.2f}, last_send_time: {time()-last_send_time:.2f}): {report}")
-        return False
 
     def process_shared_keys_report(self, path, report):
         received_keys = int.from_bytes(report[:4], byteorder='little')
@@ -158,23 +154,25 @@ class SharedKeysHost:
         s = ""
         for byte in self.report_data[2 : 6]:
             s += f"{byte:08b} "
-        logging.info(f"SL: {is_scroll_lock_on()}, {s[:-1]}")
+        hwnd = win32gui.GetForegroundWindow()
+        window_title = win32gui.GetWindowText(hwnd)
+        logger.info(f"Win: {window_title}, {s[:-1]}")
         for path, dev in self.devs.items():
             try:
                 write_start = time()
                 dev.write(bytes(self.report_data))
                 took = time() - write_start
                 if (took) > 0.5:
-                    logging.warning(f"Write took a long time (send_shared_keys_report): {took}")
+                    logger.warning(f"Write took a long time (send_shared_keys_report): {took}")
             except Exception as e:
-                logging.exception(f"Exception during write to {path} (last_send_time: {time()-last_send_time:.2f}): {e}")
+                logger.exception(f"Exception during write to {path} (last_send_time: {time()-last_send_time:.2f}): {e}")
 
 
 if __name__ == "__main__":
-    logging.info("Application starting")
+    logger.info("Application starting")
     host = SharedKeysHost()
     try:
         asyncio.run(host.run())
     except KeyboardInterrupt:
         pass
-    logging.info("Application exiting")
+    logger.info("Application exiting")
