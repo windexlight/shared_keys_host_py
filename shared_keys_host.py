@@ -6,9 +6,13 @@ from dataclasses import dataclass
 import logging
 import ctypes
 from time import time
-import win32gui
+# import win32gui
+from active_win_info import process_window_events, windows_event_worker, process_info
+import keyboard
 
 last_send_time = 0
+
+logging.getLogger("asyncio").setLevel(logging.DEBUG)
 
 def setup_logger():
     logger = logging.getLogger("app_logger")
@@ -59,17 +63,38 @@ class SharedKeysHost:
         self.get_shared_keys_report = bytes(report_data)
         report_data[1] = 0xC1
         self.report_data = report_data
+        self.down = False
 
     async def run(self):
+        event_queue = asyncio.Queue()
+        current_loop = asyncio.get_running_loop()
         async with asyncio.TaskGroup() as tg:
             tg.create_task(self.heartbeat_loop())
+            tg.create_task(process_window_events(event_queue, self.handle_foreground_win_change))
+            tg.create_task(asyncio.to_thread(windows_event_worker, current_loop, event_queue))
+            # keyboard.hook(
+            #     lambda e: current_loop.call_soon_threadsafe(lambda: asyncio.create_task(self.on_f24_event(e))) if e.name in ['f24', 'f23'] else None
+            # )
+            tg.create_task(asyncio.to_thread(
+                keyboard.hook,
+                lambda e: current_loop.call_soon_threadsafe(asyncio.create_task, self.on_f24_event(e)) if e.name == 'f24' else None
+            ))
             while not shutdown_event.is_set():
-                for d in hid.enumerate():
+                start = time()
+                devices = hid.enumerate()
+                took = time() - start
+                if (took) > 0.1:
+                    logger.warning(f"enumerate took a long time: {took}")
+                for d in devices:
                     path = d['path']
                     if device(vid=d['vendor_id'], pid=d['product_id']) in RAW_HID_DEVICES \
                         and path not in self.devs and d['usage_page'] == RAW_HID_USAGE_PAGE and d['usage'] == RAW_HID_USAGE:
                         dev = hid.device()
+                        start = time()
                         dev.open_path(path)
+                        took = time() - start
+                        if (took) > 0.1:
+                            logger.warning(f"open_path took a long time: {took}")
                         dev.set_nonblocking(False)
                         self.devs[path] = dev
                         self.send_shared_keys_report()
@@ -80,6 +105,15 @@ class SharedKeysHost:
                     await asyncio.wait_for(shutdown_event.wait(), timeout=0.5)
                 except TimeoutError:
                     pass
+
+    async def on_f24_event(self, event):
+        if event.event_type == 'down':
+            if not self.down:
+                self.down = True
+                logger.info("F24 was PRESSED!")
+        elif event.event_type == 'up':
+            self.down = False
+            logger.info("F24 was RELEASED!")
 
     async def read_loop(self, path, device):
         last_report_time = 0
@@ -107,8 +141,10 @@ class SharedKeysHost:
             for path, dev in self.devs.items():
                 try:
                     write_start = time()
-                    if dev.write(bytes(self.get_shared_keys_report)) < 0:
+                    if (cnt := dev.write(bytes(self.get_shared_keys_report))) < 0:
                         logger.error(f"Write to {path} returned error (last_send_time: {time()-last_send_time:.2f}): {dev.error()}")
+                    if cnt != len(self.get_shared_keys_report):
+                        logger.error(f"Write did not return correct number of bytes written. Returned {cnt}")
                     last_send_time = time()
                 except Exception as e:
                     logger.exception(f"Exception during write to {path} (last_send_time: {time()-last_send_time:.2f}): {e}")
@@ -154,9 +190,9 @@ class SharedKeysHost:
         s = ""
         for byte in self.report_data[2 : 6]:
             s += f"{byte:08b} "
-        hwnd = win32gui.GetForegroundWindow()
-        window_title = win32gui.GetWindowText(hwnd)
-        logger.info(f"Win: {window_title}, {s[:-1]}")
+        # hwnd = win32gui.GetForegroundWindow()
+        # window_title = win32gui.GetWindowText(hwnd)
+        logger.info(f"{s[:-1]}")
         for path, dev in self.devs.items():
             try:
                 write_start = time()
@@ -167,12 +203,14 @@ class SharedKeysHost:
             except Exception as e:
                 logger.exception(f"Exception during write to {path} (last_send_time: {time()-last_send_time:.2f}): {e}")
 
+    def handle_foreground_win_change(self, process: process_info):
+        logger.info(f"{process.title}, {process.process}, {process.pid}")
 
 if __name__ == "__main__":
     logger.info("Application starting")
     host = SharedKeysHost()
     try:
-        asyncio.run(host.run())
+        asyncio.run(host.run(), debug=True)
     except KeyboardInterrupt:
         pass
     logger.info("Application exiting")
