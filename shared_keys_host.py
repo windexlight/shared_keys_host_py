@@ -80,27 +80,28 @@ class SharedKeysHost:
                 lambda e: current_loop.call_soon_threadsafe(asyncio.create_task, self.on_f24_event(e)) if e.name == 'f24' else None
             ))
             while not shutdown_event.is_set():
-                start = time()
-                devices = hid.enumerate()
-                took = time() - start
-                if (took) > 0.1:
-                    logger.warning(f"enumerate took a long time: {took}")
-                for d in devices:
-                    path = d['path']
-                    if device(vid=d['vendor_id'], pid=d['product_id']) in RAW_HID_DEVICES \
-                        and path not in self.devs and d['usage_page'] == RAW_HID_USAGE_PAGE and d['usage'] == RAW_HID_USAGE:
-                        dev = hid.device()
-                        start = time()
-                        dev.open_path(path)
-                        took = time() - start
-                        if (took) > 0.1:
-                            logger.warning(f"open_path took a long time: {took}")
-                        dev.set_nonblocking(False)
-                        self.devs[path] = dev
-                        self.send_shared_keys_report()
-                        dev.write(self.get_shared_keys_report)
-                        tg.create_task(self.read_loop(path, dev))
-                        logger.info(f"Connected to {path}")
+                if len(self.devs) < len(RAW_HID_DEVICES):
+                    start = time()
+                    devices = await asyncio.to_thread(hid.enumerate)
+                    took = time() - start
+                    if (took) > 0.1:
+                        logger.warning(f"enumerate took a long time: {took}")
+                    for d in devices:
+                        path = d['path']
+                        if device(vid=d['vendor_id'], pid=d['product_id']) in RAW_HID_DEVICES \
+                            and path not in self.devs and d['usage_page'] == RAW_HID_USAGE_PAGE and d['usage'] == RAW_HID_USAGE:
+                            dev = hid.device()
+                            start = time()
+                            dev.open_path(path)
+                            took = time() - start
+                            if (took) > 0.1:
+                                logger.warning(f"open_path took a long time: {took}")
+                            dev.set_nonblocking(False)
+                            self.devs[path] = dev
+                            self.send_shared_keys_report()
+                            dev.write(self.get_shared_keys_report)
+                            tg.create_task(self.read_loop(path, dev))
+                            logger.info(f"Connected to {path}")
                 try:
                     await asyncio.wait_for(shutdown_event.wait(), timeout=0.5)
                 except TimeoutError:
