@@ -7,7 +7,7 @@ import logging
 import ctypes
 from time import time
 # import win32gui
-from active_win_info import process_window_events, windows_event_worker, process_info
+from active_win_info import process_window_events, windows_event_worker, process_info, find_nvim_pid
 import keyboard
 
 last_send_time = 0
@@ -205,6 +205,8 @@ class SharedKeysHost:
 
     def handle_foreground_win_change(self, process: process_info):
         logger.info(f"{process.title}, {process.process}, {process.pid}")
+        if (nvim_pid := find_nvim_pid(process.pid)) is not None:
+            logger.info(f"Found nvim: {nvim_pid}")
 
 if __name__ == "__main__":
     logger.info("Application starting")

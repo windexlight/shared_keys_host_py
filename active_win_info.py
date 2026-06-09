@@ -6,6 +6,9 @@ import win32process
 import psutil
 from dataclasses import dataclass
 from collections.abc import Callable
+import logging
+
+logger = logging.getLogger("app_logger")
 
 @dataclass(frozen=True, kw_only=True)
 class process_info:
@@ -54,3 +57,19 @@ async def process_window_events(event_queue: asyncio.Queue, callback: Callable[[
     while True:
         callback(await event_queue.get())
         event_queue.task_done()
+
+def find_nvim_pid(terminal_pid):
+    try:
+        terminal_process = psutil.Process(terminal_pid)
+        descendants = terminal_process.children(recursive=True)
+        for process in descendants:
+            try:
+                if process.name().lower() == 'nvim.exe':
+                    return process.pid
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except psutil.NoSuchProcess:
+        logger.error(f"Error: No running process found with PID {terminal_pid}")
+    except psutil.AccessDenied:
+        logger.error(f"Error: Access denied to process {terminal_pid}. Try running as Administrator.")
+    return None
