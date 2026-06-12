@@ -4,11 +4,11 @@ import sys
 import signal
 from dataclasses import dataclass
 import logging
-import ctypes
+# import ctypes
 from time import time
 # import win32gui
-from active_win_info import process_window_events, windows_event_worker, process_info, find_nvim_pid
-import keyboard
+from active_win_info import process_window_events, windows_event_worker, process_info, find_nvim_pid #, get_wsl_nvim_for_terminal
+# import keyboard
 
 last_send_time = 0
 
@@ -75,10 +75,10 @@ class SharedKeysHost:
             # keyboard.hook(
             #     lambda e: current_loop.call_soon_threadsafe(lambda: asyncio.create_task(self.on_f24_event(e))) if e.name in ['f24', 'f23'] else None
             # )
-            tg.create_task(asyncio.to_thread(
-                keyboard.hook,
-                lambda e: current_loop.call_soon_threadsafe(asyncio.create_task, self.on_f24_event(e)) if e.name == 'f24' else None
-            ))
+            # tg.create_task(asyncio.to_thread(
+            #     keyboard.hook,
+            #     lambda e: current_loop.call_soon_threadsafe(asyncio.create_task, self.on_f24_event(e)) if e.name == 'f24' else None
+            # ))
             while not shutdown_event.is_set():
                 if len(self.devs) < len(RAW_HID_DEVICES):
                     start = time()
@@ -107,14 +107,14 @@ class SharedKeysHost:
                 except TimeoutError:
                     pass
 
-    async def on_f24_event(self, event):
-        if event.event_type == 'down':
-            if not self.down:
-                self.down = True
-                logger.info("F24 was PRESSED!")
-        elif event.event_type == 'up':
-            self.down = False
-            logger.info("F24 was RELEASED!")
+    # async def on_f24_event(self, event):
+    #     if event.event_type == 'down':
+    #         if not self.down:
+    #             self.down = True
+    #             logger.info("F24 was PRESSED!")
+    #     elif event.event_type == 'up':
+    #         self.down = False
+    #         logger.info("F24 was RELEASED!")
 
     async def read_loop(self, path, device):
         last_report_time = 0
@@ -213,7 +213,7 @@ if __name__ == "__main__":
     logger.info("Application starting")
     host = SharedKeysHost()
     try:
-        asyncio.run(host.run(), debug=True)
+        asyncio.run(host.run()) #, debug=True)
     except KeyboardInterrupt:
         pass
     logger.info("Application exiting")
