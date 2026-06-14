@@ -4,7 +4,7 @@ import subprocess
 
 def launch_neovide():
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind(('127.0.0.1', 0))
+    server_socket.bind(('0.0.0.0', 0))
     server_socket.listen(1)
 
     assigned_port = server_socket.getsockname()[1]
