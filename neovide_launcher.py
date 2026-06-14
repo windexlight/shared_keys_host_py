@@ -1,41 +1,47 @@
 import os
-import socket
 import subprocess
+import uuid
+import time
 
 def launch_neovide():
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind(('0.0.0.0', 0))
-    server_socket.listen(1)
-
-    assigned_port = server_socket.getsockname()[1]
-
+    launch_id = str(uuid.uuid4())
     child_env = os.environ.copy()
-    child_env["NVIM_HANDSHAKE_PORT"] = str(assigned_port)
-    child_env["WSLENV"] = "NVIM_HANDSHAKE_PORT/u"
+    child_env["NVIM_LAUNCH_ID"] = launch_id
+    child_env["WSLENV"] = "NVIM_LAUNCH_ID/u"
 
     # TODO: pass all this in from outside
-    proc = subprocess.Popen([r"C:\Program Files\Neovide\neovide.exe", "--wsl", "--neovim-bin", "~/.local/share/bob/nvim-bin/nvim", "--log"], env=child_env) #, cwd=r"\\wsl$\Ubuntu\home\windexlight")
-    print(f"[Python] Launched Neovide with PID: {proc.pid}")
-    print(f"[Python] Listening for Neovim connection on port {assigned_port}...")
+    proc = subprocess.Popen([r"C:\Program Files\Neovide\neovide.exe", "--wsl", "--neovim-bin", "~/.local/share/bob/nvim-bin/nvim", "--log"],
+        env=child_env,
+        cwd=r"\\wsl$\Ubuntu\home\windexlight",
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_BREAKAWAY_FROM_JOB,
+    )
+    print(f"Launched Neovide (PID: {proc.pid}). Waiting for Neovim to initialize...")
 
-    server_socket.settimeout(5.0)
+    handshake_sock = f"/tmp/nvim-handshake-{launch_id}.sock"
+    rpc_command = f"'v:lua.ReceiveWindowsPid({proc.pid})'"
 
-    try:
-        client_socket, client_address = server_socket.accept()
-        print(f"[Python] Neovim connected from {client_address}")
+    max_retries = 25
+    for _ in range(max_retries):
+        time.sleep(0.2)
+        try:
+            result = subprocess.run(
+                ["wsl.exe", "nvim", "--headless", "--server", handshake_sock, "--remote-expr", rpc_command],
+                capture_output=True,
+                text=True
+            )
+            if "HANDSHAKE_COMPLETE" in result.stdout:
+                print(f"Success! Handshake complete. RPC is now bound to /tmp/nvim-win-{proc.pid}.sock")
+                return
+            else:
+                print(result.stdout, result.stderr)
+        except Exception as e:
+            print(e)
 
-        request = client_socket.recv(1024).decode('utf-8')
-
-        if "GET_PID" in request:
-            response = f"{proc.pid}\n"
-            client_socket.sendall(response.encode('utf-8'))
-            print(f"[Python] Sent PID {proc.pid} to Neovim. Handshake complete.")
-
-        client_socket.close()
-    except socket.timeout:
-        print("[Error] Handshake timed out. Neovim did not connect within 5 seconds.")
-    finally:
-        server_socket.close()
+    print("Error: Timed out waiting for Neovim handshake.")
+    pass
 
 if __name__ == "__main__":
     launch_neovide()
