@@ -15,22 +15,22 @@ class NvimListener():
             self.nvim = await asyncio.to_thread(pynvim.attach, 'child', argv=['wsl.exe', '-e', 'nc', '-U', socket_path])
             logger.info(f"Connected to nvim at {socket_path}")
 
-            def worker(*args):
-                asyncio.set_event_loop(asyncio.new_event_loop())
-                self.nvim.run_loop(*args) # type: ignore
+            # def worker(*args):
+            #     asyncio.set_event_loop(asyncio.new_event_loop())
+            #     self.nvim.run_loop(*args) # type: ignore
 
             def on_notification(method, args):
                 if method == "mode_change":
                     async_loop.call_soon_threadsafe(callback, args[0])
 
-            thread = threading.Thread(
-                target=worker, 
-                args=(None, on_notification), 
-                daemon=True
-            )
-            thread.start()
-            await asyncio.to_thread(thread.join)
-            # await asyncio.to_thread(self.nvim.run_loop, None, on_notification)
+            # thread = threading.Thread(
+            #     target=worker,
+            #     args=(None, on_notification),
+            #     daemon=True
+            # )
+            # thread.start()
+            # await asyncio.to_thread(thread.join)
+            await asyncio.to_thread(self.nvim.run_loop, None, on_notification)
 
             self.nvim = None
             logger.info(f"Disconnected from nvim at {socket_path}")
