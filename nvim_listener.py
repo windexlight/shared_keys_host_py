@@ -1,26 +1,38 @@
 import pynvim
+import asyncio
+import logging
 
-WSL_SOCKET_PATH = "/tmp/nvim-win-25056.sock"
+logger = logging.getLogger("app_logger")
 
-def on_notification(method, args):
-    if method == "mode_change":
-        print(f"[Windows] Mode changed to: {args}")
+class NvimListener():
+    def __init__(self):
+        self.nvim = None
 
-def main():
-    print(f"Spawning WSL bridge to {WSL_SOCKET_PATH}...")
+    # TODO: handle connecting locally to Windows nvim as well with a named pipe syntax (\\.\pipe, or whatever)
+    async def listen_to_nvim(self, async_loop: asyncio.AbstractEventLoop, socket_path: str, callback):
+        try:
+            self.nvim = pynvim.attach('child', argv=['wsl.exe', '-e', 'nc', '-U', socket_path])
+            logger.info(f"Connected to nvim at {socket_path}")
 
-    command = ['wsl.exe', '-e', 'nc', '-U', WSL_SOCKET_PATH] # relies on netcat being available in WSL
+            def on_notification(method, args):
+                if method == "mode_change":
+                    async_loop.call_soon_threadsafe(callback, args[0])
 
-    try:
-        nvim = pynvim.attach('child', argv=command)
-        print("Connected successfully via standard pipes! Listening...")
-        while True:
-            msg = nvim.next_message()
-            print(msg)
-        # nvim.run_loop(None, on_notification)
+            await asyncio.to_thread(self.nvim.run_loop, None, on_notification)
+            self.nvim = None
+            logger.info(f"Disconnected from nvim at {socket_path}")
 
-    except Exception as e:
-        print(f"Failed to connect. Is the WSL socket path correct? Error: {e}")
+            # while not stop_event.is_set():
+            #     msg = await asyncio.to_thread(nvim.next_message)
+            #     if msg.type == "notification" and msg.name == "mode_change":
+            #         callback(msg.args[0])
+            # nvim.stop_loop
+            # nvim.close()
 
-if __name__ == "__main__":
-    main()
+        except Exception as e:
+            logger.error(f"Failed to connect to nvim at {socket_path}. Error: {e}")
+            self.nvim = None
+
+    def stop(self):
+        if self.nvim != None:
+            self.nvim.close()
