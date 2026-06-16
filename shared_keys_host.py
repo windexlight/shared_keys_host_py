@@ -9,6 +9,8 @@ from time import time
 # import win32gui
 from active_win_info import process_window_events, windows_event_worker, process_info, find_nvim_pid #, get_wsl_nvim_for_terminal
 # import keyboard
+import os
+from nvim_listener import NvimListener
 
 last_send_time = 0
 
@@ -64,11 +66,14 @@ class SharedKeysHost:
         report_data[1] = 0xC1
         self.report_data = report_data
         self.down = False
+        self.nvim_listener = NvimListener()
+        self.tg = None
 
     async def run(self):
         event_queue = asyncio.Queue()
         current_loop = asyncio.get_running_loop()
         async with asyncio.TaskGroup() as tg:
+            self.tg = tg
             tg.create_task(self.heartbeat_loop())
             tg.create_task(process_window_events(event_queue, self.handle_foreground_win_change))
             tg.create_task(asyncio.to_thread(windows_event_worker, current_loop, event_queue))
@@ -206,8 +211,15 @@ class SharedKeysHost:
 
     def handle_foreground_win_change(self, process: process_info):
         logger.info(f"{process.title}, {process.process}, {process.pid}")
+        self.nvim_listener.stop()
         if (nvim_pid := find_nvim_pid(process.pid)) is not None:
             logger.info(f"Found nvim: {nvim_pid}")
+        elif os.path.exists(fr"\\wsl$\Ubuntu\tmp\nvim-win-{process.pid}.sock"): # TODO - don't assume Ubuntu
+            if self.tg is not None:
+                self.tg.create_task(self.nvim_listener.listen_to_nvim(asyncio.get_running_loop(), f"/tmp/nvim-win-{process.pid}.sock", self.nvim_mode_changed))
+
+    def nvim_mode_changed(self, mode: str):
+        logger.info(f"nvim mode changed to {mode}")
 
 if __name__ == "__main__":
     logger.info("Application starting")
