@@ -10,7 +10,7 @@ from time import time
 from active_win_info import process_window_events, windows_event_worker, process_info, find_nvim_pid #, get_wsl_nvim_for_terminal
 # import keyboard
 import os
-from nvim_listener import NvimListener
+from nvim_listener import NvimListener, watch_wsl_sockets, on_file_event, watch_windows_pipes
 
 last_send_time = 0
 
@@ -77,6 +77,8 @@ class SharedKeysHost:
             tg.create_task(self.heartbeat_loop())
             tg.create_task(process_window_events(event_queue, self.handle_foreground_win_change))
             tg.create_task(asyncio.to_thread(windows_event_worker, current_loop, event_queue))
+            tg.create_task(watch_wsl_sockets(on_file_event))
+            tg.create_task(watch_windows_pipes(on_file_event))
             # keyboard.hook(
             #     lambda e: current_loop.call_soon_threadsafe(lambda: asyncio.create_task(self.on_f24_event(e))) if e.name in ['f24', 'f23'] else None
             # )
@@ -211,18 +213,21 @@ class SharedKeysHost:
 
     def handle_foreground_win_change(self, process: process_info):
         logger.info(f"{process.title}, {process.process}, {process.pid}")
-        self.nvim_listener.stop()
+        # self.nvim_listener.stop()
         if (nvim_pid := find_nvim_pid(process.pid)) is not None:
             logger.info(f"Found nvim: {nvim_pid}")
-        elif os.path.exists(fr"\\wsl$\Ubuntu\tmp\nvim-win-{process.pid}.sock"): # TODO - don't assume Ubuntu
-            if self.tg is not None:
-                self.tg.create_task(self.nvim_listener.listen_to_nvim(asyncio.get_running_loop(), f"/tmp/nvim-win-{process.pid}.sock", self.nvim_mode_changed))
+        # elif os.path.exists(fr"\\wsl$\Ubuntu\tmp\nvim-win-{process.pid}.sock"): # TODO - don't assume Ubuntu
+        #     if self.tg is not None:
+        #         self.tg.create_task(self.nvim_listener.listen_to_nvim(asyncio.get_running_loop(), f"/tmp/nvim-win-{process.pid}.sock", self.nvim_mode_changed))
 
     def nvim_mode_changed(self, mode: str):
         logger.info(f"nvim mode changed to {mode}")
 
 if __name__ == "__main__":
     logger.info("Application starting")
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
     host = SharedKeysHost()
     try:
         asyncio.run(host.run()) #, debug=True)
