@@ -75,10 +75,10 @@ class SharedKeysHost:
         async with asyncio.TaskGroup() as tg:
             self.tg = tg
             tg.create_task(self.heartbeat_loop())
-            tg.create_task(process_window_events(event_queue, self.handle_foreground_win_change))
-            tg.create_task(asyncio.to_thread(windows_event_worker, current_loop, event_queue))
-            tg.create_task(watch_wsl_sockets(on_file_event))
-            tg.create_task(watch_windows_pipes(on_file_event))
+            tg.create_task(process_window_events(event_queue, self.handle_foreground_win_change))  # TODO -- shut down gracefully?
+            tg.create_task(asyncio.to_thread(windows_event_worker, current_loop, event_queue))  # TODO -- shut down gracefully?
+            tg.create_task(watch_wsl_sockets(on_file_event)) # TODO -- shut down gracefully?
+            tg.create_task(watch_windows_pipes(on_file_event)) # TODO -- shut down gracefully?
             # keyboard.hook(
             #     lambda e: current_loop.call_soon_threadsafe(lambda: asyncio.create_task(self.on_f24_event(e))) if e.name in ['f24', 'f23'] else None
             # )
@@ -225,8 +225,8 @@ class SharedKeysHost:
 
 if __name__ == "__main__":
     logger.info("Application starting")
-    if sys.platform == 'win32':
-        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    # if sys.platform == 'win32':
+    #     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
     host = SharedKeysHost()
     try:

@@ -1,7 +1,10 @@
 import pynvim
 import asyncio
 import logging
-import threading
+import os
+import re
+from typing import Callable
+from enum import Enum, auto
 
 logger = logging.getLogger("app_logger")
 
@@ -117,76 +120,60 @@ class NvimListener():
 # if __name__ == "__main__":
 #     asyncio.run(main())
 
+class NvimListenerPlatform(Enum):
+    Wsl = 0
+    Win = auto()
 
-import os
-import re
-import sys
-from typing import Callable
+class NvimInstanceEvent(Enum):
+    Started = 0
+    Stopped = auto()
 
-# ==========================================
-# Configuration & Patterns
-# ==========================================
 WSL_WATCH_DIR = "/tmp"
-WSL_PATTERN = r"^nvim-win-[0-9]+\.sock$"
+WSL_PATTERN = re.compile(r"^nvim-win-[0-9]+\.sock$")
 
 WIN_PIPE_DIR = r"\\.\pipe"
 WIN_PATTERN = re.compile(r"^nvim-win-[0-9]+$")
 
-# ==========================================
-# Custom Notification Handler
-# ==========================================
-def on_file_event(platform: str, action: str, item_name: str):
+def on_file_event(platform: NvimListenerPlatform, event: NvimInstanceEvent, socket_name: str):
     """
     Your custom callback handler. Plug your application logic here.
     platform: 'wsl' or 'windows'
-    action:   'CREATED' or 'REMOVED'
-    item_name: The name of the socket or named pipe
+    event:   'CREATED' or 'REMOVED'
+    socket_name: The name of the socket or named pipe
     """
-    logger.info(f"[EVENT] [{platform.upper()}] {action}: {item_name}")
+    logger.info(f"[EVENT] [{platform}] {event}: {socket_name}")
 
 
-# ==========================================
-# WSL Watcher Task (inotifywait via stdio)
-# ==========================================
-async def watch_wsl_sockets(callback: Callable[[str, str, str], None]):
-    # Formulate the inotifywait command to monitor creates and deletes, formatting output as 'EVENT,filename'
-    # We use stdbuf to force line-buffering so events stream immediately through the pipe
+async def watch_wsl_sockets(callback: Callable[[NvimListenerPlatform, NvimInstanceEvent, str], None]):
+    # TODO --- not working... for some reason, it not only won't catch one already started, but it also won't see when it stops
+    # it does catch existing closes without the -t 0 line.
     wsl_cmd = (
+        # f"stdbuf -oL inotifywait -t 0 -r -e create --format 'RE_EXIST,%f' {WSL_WATCH_DIR} && "
         f"stdbuf -oL inotifywait -m -e create -e delete --format '%e,%f' {WSL_WATCH_DIR}"
     )
-    
+    CREATE_NO_WINDOW = 0x08000000
     try:
         proc = await asyncio.create_subprocess_exec(
             "wsl.exe", "--", "bash", "-c", wsl_cmd,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
+            creationflags=CREATE_NO_WINDOW,
         )
     except FileNotFoundError:
-        logger.error("Error: wsl.exe not found on the Windows PATH.", file=sys.stderr)
+        logger.error("Error: wsl.exe not found on the Windows PATH.")
         return
-
-    logger.info(f"WSL Watcher started via wsl.exe tracking {WSL_WATCH_DIR}...")
-    regex = re.compile(WSL_PATTERN)
-
     try:
-        # Read the stdout stream line-by-line asynchronously
         while True:
-            line_bytes = await proc.stdout.readline()
+            line_bytes = await proc.stdout.readline() # type: ignore
             if not line_bytes:
                 break
-                
             line = line_bytes.decode('utf-8').strip()
             if ',' not in line:
                 continue
-                
             event_type, filename = line.split(',', 1)
-            
-            if regex.match(filename):
-                # inotifywait outputs uppercase events like 'CREATE' or 'DELETE'
-                # (or 'CREATE,ISDIR' if it were a directory, but we filter by regex file patterns)
-                action = "CREATED" if "CREATE" in event_type else "REMOVED"
-                callback("wsl", action, filename)
-                
+            if WSL_PATTERN.match(filename):
+                action = NvimInstanceEvent.Started if "RE_EXIST" in event_type or "CREATE" in event_type else NvimInstanceEvent.Stopped
+                callback(NvimListenerPlatform.Wsl, action, filename)
     except asyncio.CancelledError:
         if proc.returncode is None:
             try:
@@ -194,70 +181,54 @@ async def watch_wsl_sockets(callback: Callable[[str, str, str], None]):
                 await proc.wait()
             except ProcessLookupError:
                 pass
-        logger.info("WSL Watcher stopped.")
 
 
-# ==========================================
-# Windows Watcher Task (Named Pipe Polling)
-# ==========================================
-async def watch_windows_pipes(callback: Callable[[str, str, str], None], poll_interval: float = 0.05):
-    logger.info(f"Windows Watcher started tracking {WIN_PIPE_DIR}...")
+async def watch_windows_pipes(callback: Callable[[NvimListenerPlatform, NvimInstanceEvent, str], None], poll_interval: float = 0.05):
     current_pipes = set()
-    
-    try:
-        current_pipes = set(os.listdir(WIN_PIPE_DIR))
-    except Exception as e:
-        logger.error(f"Warning: Could not baseline named pipes: {e}", file=sys.stderr)
-
     while True:
         try:
             await asyncio.sleep(poll_interval)
             latest_pipes = set(os.listdir(WIN_PIPE_DIR))
         except asyncio.CancelledError:
-            logger.info("Windows Watcher stopped.")
             break
         except Exception:
             continue
-
         added = latest_pipes - current_pipes
         removed = current_pipes - latest_pipes
-
         for pipe in added:
             if WIN_PATTERN.match(pipe):
-                callback("windows", "CREATED", pipe)
-
+                callback(NvimListenerPlatform.Win, NvimInstanceEvent.Started, pipe)
         for pipe in removed:
             if WIN_PATTERN.match(pipe):
-                callback("windows", "REMOVED", pipe)
-
+                callback(NvimListenerPlatform.Win, NvimInstanceEvent.Stopped, pipe)
         current_pipes = latest_pipes
 
 
-# ==========================================
-# Main Event Loop Coordination
-# ==========================================
-async def main():
-    # Gather both background monitoring tasks
-    wsl_task = asyncio.create_task(watch_wsl_sockets(on_file_event))
-    win_task = asyncio.create_task(watch_windows_pipes(on_file_event))
+# # ==========================================
+# # Main Event Loop Coordination
+# # ==========================================
+# async def main():
+#     # Gather both background monitoring tasks
+#     wsl_task = asyncio.create_task(watch_wsl_sockets(on_file_event))
+#     win_task = asyncio.create_task(watch_windows_pipes(on_file_event))
     
-    try:
-        # Run until explicitly interrupted (Ctrl+C)
-        await asyncio.gather(wsl_task, win_task)
-    except KeyboardInterrupt:
-        print("\nShutting down tasks...")
-    finally:
-        wsl_task.cancel()
-        win_task.cancel()
-        # Allow tasks to clean up their process handles/loops
-        await asyncio.gather(wsl_task, win_task, return_exceptions=True)
+#     try:
+#         # Run until explicitly interrupted (Ctrl+C)
+#         await asyncio.gather(wsl_task, win_task)
+#     except KeyboardInterrupt:
+#         print("\nShutting down tasks...")
+#     finally:
+#         wsl_task.cancel()
+#         win_task.cancel()
+#         # Allow tasks to clean up their process handles/loops
+#         await asyncio.gather(wsl_task, win_task, return_exceptions=True)
 
-if __name__ == "__main__":
-    # Ensure proper proactor event loop setup on Windows for subprocess piping
-    if sys.platform == 'win32':
-        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+# if __name__ == "__main__":
+#     # Ensure proper proactor event loop setup on Windows for subprocess piping
+#     if sys.platform == 'win32':
+#         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
         
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Exited cleanly.")
+#     try:
+#         asyncio.run(main())
+#     except KeyboardInterrupt:
+#         print("Exited cleanly.")
