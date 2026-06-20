@@ -10,7 +10,7 @@ from time import time
 from active_win_info import process_window_events, windows_event_worker, process_info, find_nvim_pid #, get_wsl_nvim_for_terminal
 # import keyboard
 import os
-from nvim_listener import NvimListener, watch_wsl_sockets, on_file_event, watch_windows_pipes
+from nvim_listener import NvimListener, watch_wsl_sockets, watch_windows_pipes, NvimListenerPlatform, NvimInstanceEvent
 
 last_send_time = 0
 
@@ -66,7 +66,6 @@ class SharedKeysHost:
         report_data[1] = 0xC1
         self.report_data = report_data
         self.down = False
-        self.nvim_listener = NvimListener()
         self.tg = None
 
     async def run(self):
@@ -77,8 +76,8 @@ class SharedKeysHost:
             tg.create_task(self.heartbeat_loop())
             tg.create_task(process_window_events(event_queue, self.handle_foreground_win_change))  # TODO -- shut down gracefully?
             tg.create_task(asyncio.to_thread(windows_event_worker, current_loop, event_queue))  # TODO -- shut down gracefully?
-            tg.create_task(watch_wsl_sockets(on_file_event)) # TODO -- shut down gracefully?
-            tg.create_task(watch_windows_pipes(on_file_event)) # TODO -- shut down gracefully?
+            tg.create_task(watch_wsl_sockets(self.nvim_instance_event)) # TODO -- shut down gracefully?
+            tg.create_task(watch_windows_pipes(self.nvim_instance_event)) # TODO -- shut down gracefully?
             # keyboard.hook(
             #     lambda e: current_loop.call_soon_threadsafe(lambda: asyncio.create_task(self.on_f24_event(e))) if e.name in ['f24', 'f23'] else None
             # )
@@ -219,6 +218,10 @@ class SharedKeysHost:
         # elif os.path.exists(fr"\\wsl$\Ubuntu\tmp\nvim-win-{process.pid}.sock"): # TODO - don't assume Ubuntu
         #     if self.tg is not None:
         #         self.tg.create_task(self.nvim_listener.listen_to_nvim(asyncio.get_running_loop(), f"/tmp/nvim-win-{process.pid}.sock", self.nvim_mode_changed))
+
+    def nvim_instance_event(self, platform: NvimListenerPlatform, event: NvimInstanceEvent, socket_path: str):
+        listener = NvimListener(platform, socket_path)
+        self.tg.create_task(listener.listen()) # type: ignore
 
     def nvim_mode_changed(self, mode: str):
         logger.info(f"nvim mode changed to {mode}")
