@@ -6,6 +6,7 @@ import re
 from typing import Callable
 from enum import Enum, auto
 import msgpack
+import inspect
 
 logger = logging.getLogger("app_logger")
 
@@ -37,7 +38,28 @@ class NvimListener():
             await self.listen_wsl()
 
     async def listen_win(self):
-        pass
+        logger.info(f"Starting listener for {self.socket_path}")
+        try:
+            def read_pipe():
+                with open(self.socket_path, 'r+b', buffering=0) as pipe:
+                    coro = self.query_current_mode(pipe, pipe)
+                    coro.send(None) # TODO -- not working
+                    unpacker = msgpack.Unpacker(raw=False)
+                    while True:
+                        chunk = pipe.read(1024)
+                        if not chunk:
+                            break
+                        unpacker.feed(chunk)
+                        for msg in unpacker:
+                            if isinstance(msg, list) and len(msg) == 3 and msg[0] == 2:
+                                method = msg[1]
+                                args = msg[2]
+                                if method == "mode_change":
+                                    logger.info(f"{self.socket_path} mode changed to: {args[0]}")
+            await asyncio.to_thread(read_pipe)
+        except Exception as e:
+            logger.error(f"Error in {self.socket_path} listener: {e}")
+        logger.info(f"Listener for {self.socket_path} stopped")
 
     async def listen_wsl(self):
         try:
@@ -47,7 +69,8 @@ class NvimListener():
                 stdin=asyncio.subprocess.PIPE,
                 creationflags=CREATE_NO_WINDOW,
             )
-            logger.info(f"Started listener for {self.socket_path}")
+            logger.info(f"Starting listener for {self.socket_path}")
+            await self.query_current_mode(process.stdout, process.stdin)
             unpacker = msgpack.Unpacker(raw=False)
             while True:
                 chunk = await process.stdout.read(1024) # type: ignore
@@ -63,6 +86,35 @@ class NvimListener():
         except Exception as e:
             logger.info(f"Error in {self.socket_path} listener: {e}")
         logger.info(f"Listener for {self.socket_path} stopped")
+
+    async def query_current_mode(self, reader, writer):
+        try:
+            req_id = 1
+            request = [0, req_id, "nvim_get_mode", []]
+            writer.write(msgpack.packb(request))
+            if hasattr(writer, "flush"):
+                writer.flush()
+            unpacker = msgpack.Unpacker(raw=False)
+            while True:
+                chunk = reader.read(1024)
+                if inspect.isawaitable(chunk):
+                    chunk = await chunk
+                if not chunk:
+                    break
+                unpacker.feed(chunk)
+                for msg in unpacker:
+                    if isinstance(msg, list) and len(msg) == 4 and msg[0] == 1:
+                        if msg[1] == req_id:
+                            error = msg[2]
+                            result = msg[3]
+                            if error:
+                                logger.error(f"Failed to get initial mode from {self.socket_path}: {error}")
+                            else:
+                                current_mode = result.get('mode', 'unknown')
+                                logger.info(f"Initial {self.socket_path} mode on startup: {current_mode}")
+                            return
+        except Exception as e:
+            logger.error(f"Failed during initial startup mode query to {self.socket_path}: {e}")
 
 async def watch_wsl_sockets(callback: Callable[[NvimListenerPlatform, NvimInstanceEvent, str], None]):
     wsl_cmd = (

@@ -220,8 +220,9 @@ class SharedKeysHost:
         #         self.tg.create_task(self.nvim_listener.listen_to_nvim(asyncio.get_running_loop(), f"/tmp/nvim-win-{process.pid}.sock", self.nvim_mode_changed))
 
     def nvim_instance_event(self, platform: NvimListenerPlatform, event: NvimInstanceEvent, socket_path: str):
-        listener = NvimListener(platform, socket_path)
-        self.tg.create_task(listener.listen()) # type: ignore
+        if event == NvimInstanceEvent.Started:
+            listener = NvimListener(platform, socket_path)
+            self.tg.create_task(listener.listen()) # type: ignore
 
     def nvim_mode_changed(self, mode: str):
         logger.info(f"nvim mode changed to {mode}")
