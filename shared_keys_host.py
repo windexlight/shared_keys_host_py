@@ -4,13 +4,9 @@ import sys
 import signal
 from dataclasses import dataclass
 import logging
-# import ctypes
 from time import time
-# import win32gui
-from active_win_info import process_window_events, windows_event_worker, process_info, find_nvim_pid #, get_wsl_nvim_for_terminal
-# import keyboard
-import os
-from nvim_listener import NvimListener, watch_wsl_sockets, watch_windows_pipes, NvimListenerPlatform, NvimInstanceEvent
+from active_win_info import process_window_events, windows_event_worker, process_info, find_nvim_pid
+from nvim_listener import NvimListener, watch_wsl_sockets, watch_windows_pipes, NvimListenerPlatform, NvimInstanceEvent, NvimEntryMode, NvimListeners
 
 last_send_time = 0
 
@@ -67,6 +63,9 @@ class SharedKeysHost:
         self.report_data = report_data
         self.down = False
         self.tg = None
+        self.active_window_pid = None
+        self.active_nvim_pid = None
+        self.focused_nvim_mode = None
 
     async def run(self):
         event_queue = asyncio.Queue()
@@ -78,13 +77,6 @@ class SharedKeysHost:
             tg.create_task(asyncio.to_thread(windows_event_worker, current_loop, event_queue))  # TODO -- shut down gracefully?
             tg.create_task(watch_wsl_sockets(self.nvim_instance_event)) # TODO -- shut down gracefully?
             tg.create_task(watch_windows_pipes(self.nvim_instance_event)) # TODO -- shut down gracefully?
-            # keyboard.hook(
-            #     lambda e: current_loop.call_soon_threadsafe(lambda: asyncio.create_task(self.on_f24_event(e))) if e.name in ['f24', 'f23'] else None
-            # )
-            # tg.create_task(asyncio.to_thread(
-            #     keyboard.hook,
-            #     lambda e: current_loop.call_soon_threadsafe(asyncio.create_task, self.on_f24_event(e)) if e.name == 'f24' else None
-            # ))
             while not shutdown_event.is_set():
                 if len(self.devs) < len(RAW_HID_DEVICES):
                     start = time()
@@ -113,20 +105,11 @@ class SharedKeysHost:
                 except TimeoutError:
                     pass
 
-    # async def on_f24_event(self, event):
-    #     if event.event_type == 'down':
-    #         if not self.down:
-    #             self.down = True
-    #             logger.info("F24 was PRESSED!")
-    #     elif event.event_type == 'up':
-    #         self.down = False
-    #         logger.info("F24 was RELEASED!")
-
     async def read_loop(self, path, device):
         last_report_time = 0
         try:
             while not shutdown_event.is_set():
-                self.process_raw_hid_report(path, last_report_time, await asyncio.to_thread(device.read, RAW_HID_REPORT_LEN))
+                self.process_raw_hid_report(path, await asyncio.to_thread(device.read, RAW_HID_REPORT_LEN))
                 last_report_time = time()
         except Exception as e:
             logger.exception(f"Read loop terminating due to exception (last_report_time: {time()-last_report_time:.2f}, last_send_time: {time()-last_send_time:.2f}): {e}")
@@ -163,12 +146,8 @@ class SharedKeysHost:
             except TimeoutError:
                 pass
 
-    def process_raw_hid_report(self, path, last_report_time, report):
+    def process_raw_hid_report(self, path, report):
         if report:
-            # s = ""
-            # for byte in report[1 : 5]:
-            #     s += f"{byte:08b} "
-            # logger.info(f"{path}: {s[:-1]}")
             if len(report) == RAW_HID_REPORT_LEN:
                 if report[0] == 0xC0:
                     self.process_shared_keys_report(path, report[1:])
@@ -197,8 +176,6 @@ class SharedKeysHost:
         s = ""
         for byte in self.report_data[2 : 6]:
             s += f"{byte:08b} "
-        # hwnd = win32gui.GetForegroundWindow()
-        # window_title = win32gui.GetWindowText(hwnd)
         logger.info(f"{s[:-1]}")
         for path, dev in self.devs.items():
             try:
@@ -211,26 +188,41 @@ class SharedKeysHost:
                 logger.exception(f"Exception during write to {path} (last_send_time: {time()-last_send_time:.2f}): {e}")
 
     def handle_foreground_win_change(self, process: process_info):
-        logger.info(f"{process.title}, {process.process}, {process.pid}")
-        # self.nvim_listener.stop()
-        if (nvim_pid := find_nvim_pid(process.pid)) is not None:
-            logger.info(f"Found nvim: {nvim_pid}")
-        # elif os.path.exists(fr"\\wsl$\Ubuntu\tmp\nvim-win-{process.pid}.sock"): # TODO - don't assume Ubuntu
-        #     if self.tg is not None:
-        #         self.tg.create_task(self.nvim_listener.listen_to_nvim(asyncio.get_running_loop(), f"/tmp/nvim-win-{process.pid}.sock", self.nvim_mode_changed))
+        self.active_window_pid = process.pid
+        self.active_nvim_pid = find_nvim_pid(process.pid)
+        if self.active_nvim_pid is not None:
+            logger.info(f"Found nvim {self.active_nvim_pid} as descendant of {process.process}, {process.pid}")
+        else:
+            logger.info(f"Foreground window changed to: {process.process}, {process.pid}")
+        if self.active_window_pid and (listener := NvimListeners.get(self.active_window_pid)):
+            new_nvim_mode = listener.mode
+        elif self.active_nvim_pid and (listener := NvimListeners.get(self.active_nvim_pid)):
+            new_nvim_mode = listener.mode
+        else:
+            new_nvim_mode = None
+        if self.focused_nvim_mode != new_nvim_mode:
+            self.focused_nvim_mode = new_nvim_mode
+            self.focused_nvim_mode_changed()
 
     def nvim_instance_event(self, platform: NvimListenerPlatform, event: NvimInstanceEvent, socket_path: str):
-        listener = NvimListener(platform, socket_path)
-        self.tg.create_task(listener.listen()) # type: ignore
+        if event == NvimInstanceEvent.Started:
+            listener = NvimListener(platform, socket_path)
+            self.tg.create_task(listener.listen(self.nvim_mode_change_event)) # type: ignore
 
-    def nvim_mode_changed(self, mode: str):
-        logger.info(f"nvim mode changed to {mode}")
+    def nvim_mode_change_event(self, pid: int, mode: NvimEntryMode):
+        if pid == self.active_window_pid or pid == self.active_nvim_pid:
+            if self.focused_nvim_mode != mode:
+                self.focused_nvim_mode = mode
+                self.focused_nvim_mode_changed()
+
+    def focused_nvim_mode_changed(self):
+        logger.info(f"Focused nvim mode changed to {self.focused_nvim_mode}")
+        # TODO -- set shared key bit here
+
 
 if __name__ == "__main__":
     logger.info("Application starting")
-    # if sys.platform == 'win32':
-    #     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-
+ 
     host = SharedKeysHost()
     try:
         asyncio.run(host.run()) #, debug=True)
