@@ -10,7 +10,7 @@ from time import time
 from active_win_info import process_window_events, windows_event_worker, process_info, find_nvim_pid #, get_wsl_nvim_for_terminal
 # import keyboard
 import os
-from nvim_listener import NvimListener, watch_wsl_sockets, watch_windows_pipes, NvimListenerPlatform, NvimInstanceEvent
+from nvim_listener import NvimListener, watch_wsl_sockets, watch_windows_pipes, NvimListenerPlatform, NvimInstanceEvent, NvimEntryMode
 
 last_send_time = 0
 
@@ -222,10 +222,10 @@ class SharedKeysHost:
     def nvim_instance_event(self, platform: NvimListenerPlatform, event: NvimInstanceEvent, socket_path: str):
         if event == NvimInstanceEvent.Started:
             listener = NvimListener(platform, socket_path)
-            self.tg.create_task(listener.listen()) # type: ignore
+            self.tg.create_task(listener.listen(self.nvim_mode_changed)) # type: ignore
 
-    def nvim_mode_changed(self, mode: str):
-        logger.info(f"nvim mode changed to {mode}")
+    def nvim_mode_changed(self, pid: int, mode: NvimEntryMode):
+        logger.info(f"nvim ({pid}) mode changed to {mode}")
 
 if __name__ == "__main__":
     logger.info("Application starting")
