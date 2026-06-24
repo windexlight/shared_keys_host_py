@@ -30,7 +30,7 @@ WSL_SOCKET_FULL_PATH_PATTERN = re.compile(fr"^{WSL_SOCKET_DIR}/nvim-win-([0-9]+)
 
 WIN_PIPE_DIR = r"\\.\pipe"
 WIN_PIPE_FILENAME_PATTERN = re.compile(r"^nvim-win-([0-9]+)$")
-WIN_PIPE_FULL_PATH_PATTERN = re.compile(fr"^{WIN_PIPE_DIR}\nvim-win-([0-9]+)$")
+WIN_PIPE_FULL_PATH_PATTERN = re.compile(fr"^{re.escape(WIN_PIPE_DIR)}\\nvim-win-([0-9]+)$")
 
 @dataclass(frozen=True, kw_only=True)
 class NvimListenerData:
@@ -49,7 +49,7 @@ class NvimListener():
     def __init__(self, platform: NvimListenerPlatform, socket_path: str):
         self.socket_path = socket_path
         self.platform = platform
-        self.mode = NvimEntryMode.Insert 
+        self.mode = NvimEntryMode.Insert
         match self.platform:
             case NvimListenerPlatform.Win:
                 m = WIN_PIPE_FULL_PATH_PATTERN.search(socket_path)
@@ -66,7 +66,7 @@ class NvimListener():
             return
         key = NvimListenerData(platform=self.platform, pid=self.pid)
         if key in NvimListeners:
-            logger.error(f"Listener already has exists: {key}")
+            logger.error(f"Listener already exists: {key}")
             self.platform = NvimListenerPlatform.Unsupported
         else:
             NvimListeners[key] = self
