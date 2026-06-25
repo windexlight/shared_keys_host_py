@@ -6,11 +6,11 @@ from dataclasses import dataclass
 import logging
 # import ctypes
 from time import time
-# import win32gui
+import win32gui
 from active_win_info import process_window_events, windows_event_worker, process_info, find_nvim_pid #, get_wsl_nvim_for_terminal
 # import keyboard
 import os
-from nvim_listener import NvimListener, watch_wsl_sockets, watch_windows_pipes, NvimListenerPlatform, NvimInstanceEvent, NvimEntryMode
+from nvim_listener import NvimListener, watch_wsl_sockets, watch_windows_pipes, NvimListenerPlatform, NvimInstanceEvent, NvimEntryMode, NvimListeners
 
 last_send_time = 0
 
@@ -67,6 +67,9 @@ class SharedKeysHost:
         self.report_data = report_data
         self.down = False
         self.tg = None
+        self.active_window_pid = None
+        self.active_nvim_pid = None
+        self.focused_nvim_mode = None
 
     async def run(self):
         event_queue = asyncio.Queue()
@@ -197,8 +200,6 @@ class SharedKeysHost:
         s = ""
         for byte in self.report_data[2 : 6]:
             s += f"{byte:08b} "
-        # hwnd = win32gui.GetForegroundWindow()
-        # window_title = win32gui.GetWindowText(hwnd)
         logger.info(f"{s[:-1]}")
         for path, dev in self.devs.items():
             try:
@@ -211,21 +212,37 @@ class SharedKeysHost:
                 logger.exception(f"Exception during write to {path} (last_send_time: {time()-last_send_time:.2f}): {e}")
 
     def handle_foreground_win_change(self, process: process_info):
-        logger.info(f"{process.title}, {process.process}, {process.pid}")
-        # self.nvim_listener.stop()
-        if (nvim_pid := find_nvim_pid(process.pid)) is not None:
-            logger.info(f"Found nvim: {nvim_pid}")
-        # elif os.path.exists(fr"\\wsl$\Ubuntu\tmp\nvim-win-{process.pid}.sock"): # TODO - don't assume Ubuntu
-        #     if self.tg is not None:
-        #         self.tg.create_task(self.nvim_listener.listen_to_nvim(asyncio.get_running_loop(), f"/tmp/nvim-win-{process.pid}.sock", self.nvim_mode_changed))
+        self.active_window_pid = process.pid
+        self.active_nvim_pid = find_nvim_pid(process.pid)
+        if self.active_nvim_pid is not None:
+            logger.info(f"Found nvim {self.active_nvim_pid} as descendant of {process.process}, {process.pid}")
+        else:
+            logger.info(f"Foreground window changed to: {process.process}, {process.pid}")
+        if self.active_window_pid and (listener := NvimListeners.get(self.active_window_pid)):
+            new_nvim_mode = listener.mode
+        elif self.active_nvim_pid and (listener := NvimListeners.get(self.active_nvim_pid)):
+            new_nvim_mode = listener.mode
+        else:
+            new_nvim_mode = None
+        if self.focused_nvim_mode != new_nvim_mode:
+            self.focused_nvim_mode = new_nvim_mode
+            self.focused_nvim_mode_changed()
 
     def nvim_instance_event(self, platform: NvimListenerPlatform, event: NvimInstanceEvent, socket_path: str):
         if event == NvimInstanceEvent.Started:
             listener = NvimListener(platform, socket_path)
-            self.tg.create_task(listener.listen(self.nvim_mode_changed)) # type: ignore
+            self.tg.create_task(listener.listen(self.nvim_mode_change_event)) # type: ignore
 
-    def nvim_mode_changed(self, pid: int, mode: NvimEntryMode):
-        logger.info(f"nvim ({pid}) mode changed to {mode}")
+    def nvim_mode_change_event(self, pid: int, mode: NvimEntryMode):
+        if pid == self.active_window_pid or pid == self.active_nvim_pid:
+            if self.focused_nvim_mode != mode:
+                self.focused_nvim_mode = mode
+                self.focused_nvim_mode_changed()
+
+    def focused_nvim_mode_changed(self):
+        logger.info(f"Focused nvim mode changed to {self.focused_nvim_mode}")
+        # TODO -- set shared key bit here
+
 
 if __name__ == "__main__":
     logger.info("Application starting")

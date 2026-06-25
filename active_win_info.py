@@ -54,6 +54,7 @@ def windows_event_worker(async_loop, event_queue: asyncio.Queue):
         user32.DispatchMessageW(ctypes.byref(msg))
 
 async def process_window_events(event_queue: asyncio.Queue, callback: Callable[[process_info], None]):
+    callback(get_process_info(win32gui.GetForegroundWindow()))
     while True:
         callback(await event_queue.get())
         event_queue.task_done()
@@ -69,7 +70,7 @@ def find_nvim_pid(terminal_pid):
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
     except psutil.NoSuchProcess:
-        logger.error(f"Error: No running process found with PID {terminal_pid}")
+        logger.error(f"No running process found with PID {terminal_pid}")
     except psutil.AccessDenied:
-        logger.error(f"Error: Access denied to process {terminal_pid}. Try running as Administrator.")
+        logger.error(f"Access denied to process {terminal_pid}")
     return None

@@ -2,10 +2,9 @@ import asyncio
 import logging
 import os
 import re
-from typing import Callable
+from typing import Callable, Dict
 from enum import Enum, auto
 import msgpack
-from dataclasses import dataclass
 
 logger = logging.getLogger("app_logger")
 
@@ -32,12 +31,7 @@ WIN_PIPE_DIR = r"\\.\pipe"
 WIN_PIPE_FILENAME_PATTERN = re.compile(r"^nvim-win-([0-9]+)$")
 WIN_PIPE_FULL_PATH_PATTERN = re.compile(fr"^{re.escape(WIN_PIPE_DIR)}\\nvim-win-([0-9]+)$")
 
-@dataclass(frozen=True, kw_only=True)
-class NvimListenerData:
-    platform: NvimListenerPlatform
-    pid: int
-
-NvimListeners = {}
+NvimListeners: Dict[int, NvimListener] = {}
 
 def nvim_entry_mode_from_string(mode_string: str):
     if mode_string.startswith(("n", "v", "V", "\x16")):
@@ -64,12 +58,11 @@ class NvimListener():
             logger.error(f"Pid not found in socket path {socket_path}")
             self.platform = NvimListenerPlatform.Unsupported
             return
-        key = NvimListenerData(platform=self.platform, pid=self.pid)
-        if key in NvimListeners:
-            logger.error(f"Listener already exists: {key}")
+        if self.pid in NvimListeners:
+            logger.error(f"Listener already exists: {self.pid}")
             self.platform = NvimListenerPlatform.Unsupported
         else:
-            NvimListeners[key] = self
+            NvimListeners[self.pid] = self
 
     async def listen(self, callback: Callable[[int, NvimEntryMode], None]):
         match self.platform:
@@ -105,7 +98,7 @@ class NvimListener():
             await asyncio.to_thread(read_pipe)
         except Exception as e:
             logger.error(f"Error in {self.socket_path} listener: {e}")
-        del NvimListeners[NvimListenerData(platform=self.platform, pid=self.pid)]
+        del NvimListeners[self.pid]
         logger.info(f"Listener for {self.socket_path} stopped")
 
     async def listen_wsl(self, callback: Callable[[int, NvimEntryMode], None]):
@@ -136,7 +129,7 @@ class NvimListener():
                                 callback(self.pid, self.mode)
         except Exception as e:
             logger.info(f"Error in {self.socket_path} listener: {e}")
-        del NvimListeners[NvimListenerData(platform=self.platform, pid=self.pid)]
+        del NvimListeners[self.pid]
         logger.info(f"Listener for {self.socket_path} stopped")
 
     def query_current_mode_win(self, pipe, callback: Callable[[int, NvimEntryMode], None]):
