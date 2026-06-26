@@ -191,7 +191,10 @@ class SharedKeysHost:
 
     def handle_foreground_win_change(self, process: process_info):
         self.active_window_pid = process.pid
-        self.active_nvim_pid = find_nvim_pid(process.pid)
+        if process.process != "explorer.exe": # nvim can be found as a descendant of explorer.exe, need to weed that out
+            self.active_nvim_pid = find_nvim_pid(process.pid)
+        else:
+            self.active_nvim_pid = None
         if self.active_nvim_pid is not None:
             logger.info(f"Found nvim {self.active_nvim_pid} as descendant of {process.process}, {process.pid}")
         else:
