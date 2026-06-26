@@ -191,6 +191,7 @@ class SharedKeysHost:
 
     def handle_foreground_win_change(self, process: process_info):
         self.active_window_pid = process.pid
+        # TODO -- nvim is found as a descendant of explorer.exe. need to weed that out so we don't signal keyboard there. whitelist or blacklist process names?
         self.active_nvim_pid = find_nvim_pid(process.pid)
         if self.active_nvim_pid is not None:
             logger.info(f"Found nvim {self.active_nvim_pid} as descendant of {process.process}, {process.pid}")
