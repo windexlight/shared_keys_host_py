@@ -52,6 +52,8 @@ RAW_HID_USAGE_PAGE = 0xFF60 # Standard QMK RAW HID
 RAW_HID_USAGE      = 0x61   # Standard QMK RAW HID
 RAW_HID_REPORT_LEN = 32     # Fixed for QMK RAW HID
 
+HOST_KEY = ()
+
 class SharedKeysHost:
     def __init__(self):
         self.devs = {}
@@ -207,7 +209,7 @@ class SharedKeysHost:
     def nvim_instance_event(self, platform: NvimListenerPlatform, event: NvimInstanceEvent, socket_path: str):
         if event == NvimInstanceEvent.Started:
             listener = NvimListener(platform, socket_path)
-            self.tg.create_task(listener.listen(self.nvim_mode_change_event)) # type: ignore
+            self.tg.create_task(listener.listen(asyncio.get_running_loop(), self.nvim_mode_change_event)) # type: ignore
 
     def nvim_mode_change_event(self, pid: int, mode: NvimEntryMode):
         if pid == self.active_window_pid or pid == self.active_nvim_pid:
@@ -217,7 +219,7 @@ class SharedKeysHost:
 
     def focused_nvim_mode_changed(self):
         logger.info(f"Focused nvim mode changed to {self.focused_nvim_mode}")
-        # TODO -- set shared key bit here
+        self.process_shared_keys_report(HOST_KEY, [0, 0, 0, 0x80] if self.focused_nvim_mode == NvimEntryMode.Normal else [0] * 4)
 
 
 if __name__ == "__main__":
