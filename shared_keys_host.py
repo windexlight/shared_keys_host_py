@@ -4,12 +4,8 @@ import sys
 import signal
 from dataclasses import dataclass
 import logging
-# import ctypes
 from time import time
-import win32gui
-from active_win_info import process_window_events, windows_event_worker, process_info, find_nvim_pid #, get_wsl_nvim_for_terminal
-# import keyboard
-import os
+from active_win_info import process_window_events, windows_event_worker, process_info, find_nvim_pid
 from nvim_listener import NvimListener, watch_wsl_sockets, watch_windows_pipes, NvimListenerPlatform, NvimInstanceEvent, NvimEntryMode, NvimListeners
 
 last_send_time = 0
@@ -81,13 +77,6 @@ class SharedKeysHost:
             tg.create_task(asyncio.to_thread(windows_event_worker, current_loop, event_queue))  # TODO -- shut down gracefully?
             tg.create_task(watch_wsl_sockets(self.nvim_instance_event)) # TODO -- shut down gracefully?
             tg.create_task(watch_windows_pipes(self.nvim_instance_event)) # TODO -- shut down gracefully?
-            # keyboard.hook(
-            #     lambda e: current_loop.call_soon_threadsafe(lambda: asyncio.create_task(self.on_f24_event(e))) if e.name in ['f24', 'f23'] else None
-            # )
-            # tg.create_task(asyncio.to_thread(
-            #     keyboard.hook,
-            #     lambda e: current_loop.call_soon_threadsafe(asyncio.create_task, self.on_f24_event(e)) if e.name == 'f24' else None
-            # ))
             while not shutdown_event.is_set():
                 if len(self.devs) < len(RAW_HID_DEVICES):
                     start = time()
@@ -116,20 +105,11 @@ class SharedKeysHost:
                 except TimeoutError:
                     pass
 
-    # async def on_f24_event(self, event):
-    #     if event.event_type == 'down':
-    #         if not self.down:
-    #             self.down = True
-    #             logger.info("F24 was PRESSED!")
-    #     elif event.event_type == 'up':
-    #         self.down = False
-    #         logger.info("F24 was RELEASED!")
-
     async def read_loop(self, path, device):
         last_report_time = 0
         try:
             while not shutdown_event.is_set():
-                self.process_raw_hid_report(path, last_report_time, await asyncio.to_thread(device.read, RAW_HID_REPORT_LEN))
+                self.process_raw_hid_report(path, await asyncio.to_thread(device.read, RAW_HID_REPORT_LEN))
                 last_report_time = time()
         except Exception as e:
             logger.exception(f"Read loop terminating due to exception (last_report_time: {time()-last_report_time:.2f}, last_send_time: {time()-last_send_time:.2f}): {e}")
@@ -166,12 +146,8 @@ class SharedKeysHost:
             except TimeoutError:
                 pass
 
-    def process_raw_hid_report(self, path, last_report_time, report):
+    def process_raw_hid_report(self, path, report):
         if report:
-            # s = ""
-            # for byte in report[1 : 5]:
-            #     s += f"{byte:08b} "
-            # logger.info(f"{path}: {s[:-1]}")
             if len(report) == RAW_HID_REPORT_LEN:
                 if report[0] == 0xC0:
                     self.process_shared_keys_report(path, report[1:])
@@ -246,9 +222,7 @@ class SharedKeysHost:
 
 if __name__ == "__main__":
     logger.info("Application starting")
-    # if sys.platform == 'win32':
-    #     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-
+ 
     host = SharedKeysHost()
     try:
         asyncio.run(host.run()) #, debug=True)
