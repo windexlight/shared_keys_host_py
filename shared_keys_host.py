@@ -1,7 +1,6 @@
 import asyncio
 import hid
 import sys
-import signal
 from dataclasses import dataclass
 import logging
 from time import time
@@ -27,17 +26,6 @@ def setup_logger():
     return logger
 
 logger = setup_logger()
-
-shutdown_event = asyncio.Event()
-
-def windows_shutdown_handler(sig, frame):
-    if asyncio.get_event_loop().is_running():
-        asyncio.get_event_loop().call_soon_threadsafe(shutdown_event.set)
-
-if sys.platform == "win32":
-    signal.signal(signal.SIGBREAK, windows_shutdown_handler)
-    signal.signal(signal.SIGINT, windows_shutdown_handler)
-
 
 @dataclass(frozen=True, kw_only=True)
 class device:
@@ -75,11 +63,11 @@ class SharedKeysHost:
         async with asyncio.TaskGroup() as tg:
             self.tg = tg
             tg.create_task(self.heartbeat_loop())
-            tg.create_task(process_window_events(event_queue, self.handle_foreground_win_change))  # TODO -- shut down gracefully?
-            tg.create_task(asyncio.to_thread(windows_event_worker, current_loop, event_queue))  # TODO -- shut down gracefully?
-            tg.create_task(watch_wsl_sockets(self.nvim_instance_event)) # TODO -- shut down gracefully?
-            tg.create_task(watch_windows_pipes(self.nvim_instance_event)) # TODO -- shut down gracefully?
-            while not shutdown_event.is_set():
+            tg.create_task(process_window_events(event_queue, self.handle_foreground_win_change))
+            tg.create_task(asyncio.to_thread(windows_event_worker, current_loop, event_queue))
+            tg.create_task(watch_wsl_sockets(self.nvim_instance_event))
+            tg.create_task(watch_windows_pipes(self.nvim_instance_event))
+            while True:
                 if len(self.devs) < len(RAW_HID_DEVICES):
                     start = time()
                     devices = await asyncio.to_thread(hid.enumerate)
@@ -102,15 +90,12 @@ class SharedKeysHost:
                             dev.write(self.get_shared_keys_report)
                             tg.create_task(self.read_loop(path, dev))
                             logger.info(f"Connected to {path}")
-                try:
-                    await asyncio.wait_for(shutdown_event.wait(), timeout=0.5)
-                except TimeoutError:
-                    pass
+                await asyncio.sleep(0.5)
 
     async def read_loop(self, path, device):
         last_report_time = 0
         try:
-            while not shutdown_event.is_set():
+            while True:
                 self.process_raw_hid_report(path, await asyncio.to_thread(device.read, RAW_HID_REPORT_LEN))
                 last_report_time = time()
         except Exception as e:
@@ -129,7 +114,7 @@ class SharedKeysHost:
 
     async def heartbeat_loop(self):
         global last_send_time
-        while not shutdown_event.is_set():
+        while True:
             for path, dev in self.devs.items():
                 try:
                     write_start = time()
@@ -143,10 +128,7 @@ class SharedKeysHost:
                 took = time() - write_start
                 if (took) > 0.5:
                     logger.warning(f"Write took a long time (heartbeat_loop): {took}")
-            try:
-                await asyncio.wait_for(shutdown_event.wait(), timeout=1.0)
-            except TimeoutError:
-                pass
+            await asyncio.sleep(1.0)
 
     def process_raw_hid_report(self, path, report):
         if report:
