@@ -29,7 +29,8 @@ def launch_neovide(args, argv):
             result = subprocess.run(
                 ["wsl.exe", args.nvim, "--headless", "--server", handshake_sock, "--remote-expr", rpc_command],
                 capture_output=True,
-                text=True
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
             if "HANDSHAKE_COMPLETE" in result.stdout:
                 return
