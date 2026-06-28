@@ -85,16 +85,7 @@ class NvimListener():
                         if not chunk:
                             break
                         unpacker.feed(chunk)
-                        for msg in unpacker:
-                            if isinstance(msg, list) and len(msg) == 3 and msg[0] == 2:
-                                method = msg[1]
-                                args = msg[2]
-                                if method == "mode_change":
-                                    logger.info(f"{self.socket_path} mode changed to: {args[0]}")
-                                    mode = nvim_entry_mode_from_string(args[0])
-                                    if mode != self.mode:
-                                        self.mode = mode
-                                        async_loop.call_soon_threadsafe(callback, self.pid, self.mode)
+                        self.handle_nvim_msgpack(unpacker, lambda: async_loop.call_soon_threadsafe(callback, self.pid, self.mode))
             await asyncio.to_thread(read_pipe)
         except Exception as e:
             logger.error(f"Error in {self.socket_path} listener: {e}")
@@ -117,20 +108,23 @@ class NvimListener():
                 if not chunk:
                     break
                 unpacker.feed(chunk)
-                for msg in unpacker:
-                    if isinstance(msg, list) and len(msg) == 3 and msg[0] == 2:
-                        method = msg[1]
-                        args = msg[2]
-                        if method == "mode_change":
-                            logger.info(f"{self.socket_path} mode changed to: {args[0]}")
-                            mode = nvim_entry_mode_from_string(args[0])
-                            if mode != self.mode:
-                                self.mode = mode
-                                callback(self.pid, self.mode)
+                self.handle_nvim_msgpack(unpacker, lambda: callback(self.pid, self.mode))
         except Exception as e:
             logger.info(f"Error in {self.socket_path} listener: {e}")
         del NvimListeners[self.pid]
         logger.info(f"Listener for {self.socket_path} stopped")
+
+    def handle_nvim_msgpack(self, unpacker, callback):
+        for msg in unpacker:
+            if isinstance(msg, list) and len(msg) == 3 and msg[0] == 2:
+                method = msg[1]
+                args = msg[2]
+                if method == "mode_change":
+                    logger.info(f"{self.socket_path} mode changed to: {args[0]}")
+                    mode = nvim_entry_mode_from_string(args[0])
+                    if mode != self.mode:
+                        self.mode = mode
+                        callback()
 
     def query_current_mode_win(self, async_loop, pipe, callback: Callable[[int, NvimEntryMode], None]):
         try:
