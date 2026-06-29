@@ -119,12 +119,18 @@ class NvimListener():
             if isinstance(msg, list) and len(msg) == 3 and msg[0] == 2:
                 method = msg[1]
                 args = msg[2]
+                mode = None
                 if method == "mode_change":
                     logger.info(f"{self.socket_path} mode changed to: {args[0]}")
                     mode = nvim_entry_mode_from_string(args[0])
-                    if mode != self.mode:
-                        self.mode = mode
-                        callback()
+                elif method == "custom_event":
+                    if args[0] == "find_char_pending":
+                        mode = NvimEntryMode.Insert
+                    elif args[0] == "find_char_done":
+                        mode = NvimEntryMode.Normal
+                if mode != self.mode:
+                    self.mode = mode
+                    callback()
 
     def query_current_mode_win(self, async_loop, pipe, callback: Callable[[int, NvimEntryMode], None]):
         try:
