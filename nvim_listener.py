@@ -44,6 +44,8 @@ class NvimListener():
         self.socket_path = socket_path
         self.platform = platform
         self.mode = NvimEntryMode.Insert
+        self.flash_mode = False
+        self.last_reported_mode = None
         match self.platform:
             case NvimListenerPlatform.Win:
                 m = WIN_PIPE_FULL_PATH_PATTERN.search(socket_path)
@@ -85,7 +87,7 @@ class NvimListener():
                         if not chunk:
                             break
                         unpacker.feed(chunk)
-                        self.handle_nvim_msgpack(unpacker, lambda: async_loop.call_soon_threadsafe(callback, self.pid, self.mode))
+                        self.handle_nvim_msgpack(unpacker, lambda pid, mode: async_loop.call_soon_threadsafe(callback, pid, mode))
             await asyncio.to_thread(read_pipe)
         except Exception as e:
             logger.error(f"Error in {self.socket_path} listener: {e}")
@@ -108,7 +110,7 @@ class NvimListener():
                 if not chunk:
                     break
                 unpacker.feed(chunk)
-                self.handle_nvim_msgpack(unpacker, lambda: callback(self.pid, self.mode))
+                self.handle_nvim_msgpack(unpacker, lambda pid, mode: callback(pid, mode))
         except Exception as e:
             logger.info(f"Error in {self.socket_path} listener: {e}")
         del NvimListeners[self.pid]
@@ -119,18 +121,18 @@ class NvimListener():
             if isinstance(msg, list) and len(msg) == 3 and msg[0] == 2:
                 method = msg[1]
                 args = msg[2]
-                mode = None
                 if method == "mode_change":
                     logger.info(f"{self.socket_path} mode changed to: {args[0]}")
-                    mode = nvim_entry_mode_from_string(args[0])
-                elif method == "custom_event":
-                    if args[0] == "find_char_pending":
-                        mode = NvimEntryMode.Insert
-                    elif args[0] == "find_char_done":
-                        mode = NvimEntryMode.Normal
-                if mode != self.mode:
-                    self.mode = mode
-                    callback()
+                    self.mode = nvim_entry_mode_from_string(args[0])
+                elif method == "flash_mode":
+                    if args[0] == "t":
+                        self.flash_mode = True
+                    elif args[0] == "f":
+                        self.flash_mode = False
+                mode_to_report = NvimEntryMode.Insert if self.flash_mode else self.mode
+                if mode_to_report != self.last_reported_mode:
+                    self.last_reported_mode = mode_to_report
+                    callback(self.pid, mode_to_report)
 
     def query_current_mode_win(self, async_loop, pipe, callback: Callable[[int, NvimEntryMode], None]):
         try:
