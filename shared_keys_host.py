@@ -55,7 +55,7 @@ class SharedKeysHost:
         self.tg = None
         self.active_window_pid = None
         self.active_nvim_pid = None
-        self.focused_nvim_mode = None
+        self.local_keys = 0
 
     async def run(self):
         event_queue = asyncio.Queue()
@@ -108,7 +108,7 @@ class SharedKeysHost:
             if path in self.devs:
                 del self.devs[path]
             if path in self.shared_keys:
-                self.process_shared_keys_report(path, [0] * 4)
+                self.process_shared_keys_report(path, 0)
                 del self.shared_keys[path]
             logger.info(f"Disconnected from {path}")
 
@@ -134,10 +134,9 @@ class SharedKeysHost:
         if report:
             if len(report) == RAW_HID_REPORT_LEN:
                 if report[0] == 0xC0:
-                    self.process_shared_keys_report(path, report[1:])
+                    self.process_shared_keys_report(path, int.from_bytes(report[1:5], byteorder='little'))
 
-    def process_shared_keys_report(self, path, report):
-        received_keys = int.from_bytes(report[:4], byteorder='little')
+    def process_shared_keys_report(self, path, received_keys):
         current = 0
         new = 0
         for shared_keys_path, shared_keys in self.shared_keys.items():
@@ -181,15 +180,20 @@ class SharedKeysHost:
             logger.info(f"Found nvim {self.active_nvim_pid} as descendant of {process.process}, {process.pid}")
         else:
             logger.info(f"Foreground window changed to: {process.process}, {process.pid}")
+        keys = self.local_keys
         if self.active_window_pid and (listener := NvimListeners.get(self.active_window_pid)):
             new_nvim_mode = listener.mode
+            keys |= (1 << 30)
         elif self.active_nvim_pid and (listener := NvimListeners.get(self.active_nvim_pid)):
             new_nvim_mode = listener.mode
+            keys |= (1 << 30)
         else:
             new_nvim_mode = None
-        if self.focused_nvim_mode != new_nvim_mode:
-            self.focused_nvim_mode = new_nvim_mode
-            self.focused_nvim_mode_changed()
+            keys &= ~(1 << 30)
+        keys = self.set_key_bit_from_nvim_entry_mode(keys, new_nvim_mode)
+        if self.local_keys != keys:
+            self.local_keys = keys
+            self.process_shared_keys_report(HOST_KEY, self.local_keys)
 
     def nvim_instance_event(self, platform: NvimListenerPlatform, event: NvimInstanceEvent, socket_path: str):
         if event == NvimInstanceEvent.Started:
@@ -198,13 +202,17 @@ class SharedKeysHost:
 
     def nvim_mode_change_event(self, pid: int, mode: NvimEntryMode):
         if pid == self.active_window_pid or pid == self.active_nvim_pid:
-            if self.focused_nvim_mode != mode:
-                self.focused_nvim_mode = mode
-                self.focused_nvim_mode_changed()
+            keys = self.set_key_bit_from_nvim_entry_mode(self.local_keys, mode)
+            if self.local_keys != keys:
+                self.local_keys = keys
+                self.process_shared_keys_report(HOST_KEY, self.local_keys)
 
-    def focused_nvim_mode_changed(self):
-        logger.info(f"Focused nvim mode changed to {self.focused_nvim_mode}")
-        self.process_shared_keys_report(HOST_KEY, [0, 0, 0, 0x80] if self.focused_nvim_mode == NvimEntryMode.Normal else [0] * 4)
+    def set_key_bit_from_nvim_entry_mode(self, keys: int, mode: NvimEntryMode | None) -> int:
+        if mode == NvimEntryMode.Normal:
+            keys |= (1 << 31)
+        else:
+            keys &= ~(1 << 31)
+        return keys
 
 
 if __name__ == "__main__":
