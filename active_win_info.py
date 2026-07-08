@@ -60,17 +60,18 @@ async def process_window_events(event_queue: asyncio.Queue, callback: Callable[[
         event_queue.task_done()
 
 def find_nvim_pid(terminal_pid):
+    nvims = []
     try:
         terminal_process = psutil.Process(terminal_pid)
         descendants = terminal_process.children(recursive=True)
         for process in descendants:
             try:
                 if process.name().lower() == 'nvim.exe':
-                    return process.pid
+                    nvims.append(process.pid)
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
     except psutil.NoSuchProcess:
         logger.error(f"No running process found with PID {terminal_pid}")
     except psutil.AccessDenied:
         logger.error(f"Access denied to process {terminal_pid}")
-    return None
+    return nvims or None

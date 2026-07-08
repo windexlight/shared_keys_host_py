@@ -66,7 +66,7 @@ class NvimListener():
         else:
             NvimListeners[self.pid] = self
 
-    async def listen(self, async_loop, callback: Callable[[int, NvimEntryMode], None]):
+    async def listen(self, async_loop, callback: Callable[[int, NvimEntryMode | None], None]):
         match self.platform:
             case NvimListenerPlatform.Win:
                 await self.listen_win(async_loop, callback)
@@ -75,7 +75,7 @@ class NvimListener():
             case _:
                 logger.error(f"Bad platform: {self.platform}")
 
-    async def listen_win(self, async_loop, callback: Callable[[int, NvimEntryMode], None]):
+    async def listen_win(self, async_loop, callback: Callable[[int, NvimEntryMode | None], None]):
         logger.info(f"Starting listener for {self.socket_path}")
         try:
             def read_pipe():
@@ -93,8 +93,9 @@ class NvimListener():
             logger.error(f"Error in {self.socket_path} listener: {e}")
         del NvimListeners[self.pid]
         logger.info(f"Listener for {self.socket_path} stopped")
+        async_loop.call_soon_threadsafe(callback, self.pid, None)
 
-    async def listen_wsl(self, callback: Callable[[int, NvimEntryMode], None]):
+    async def listen_wsl(self, callback: Callable[[int, NvimEntryMode | None], None]):
         try:
             process = await asyncio.create_subprocess_exec(
                 "wsl.exe", "-e", "nc", "-U", self.socket_path,
@@ -115,6 +116,7 @@ class NvimListener():
             logger.info(f"Error in {self.socket_path} listener: {e}")
         del NvimListeners[self.pid]
         logger.info(f"Listener for {self.socket_path} stopped")
+        callback(self.pid, None)
 
     def handle_nvim_msgpack(self, unpacker, callback):
         for msg in unpacker:
@@ -134,7 +136,7 @@ class NvimListener():
                     self.last_reported_mode = mode_to_report
                     callback(self.pid, mode_to_report)
 
-    def query_current_mode_win(self, async_loop, pipe, callback: Callable[[int, NvimEntryMode], None]):
+    def query_current_mode_win(self, async_loop, pipe, callback: Callable[[int, NvimEntryMode | None], None]):
         try:
             req_id = 1
             request = [0, req_id, "nvim_get_mode", []]

@@ -53,8 +53,8 @@ class SharedKeysHost:
         self.report_data = report_data
         self.down = False
         self.tg = None
-        self.active_window_pid = None
-        self.active_nvim_pid = None
+        self.active_window_process = None
+        self.active_nvim_pids = None
         self.local_keys = 0
 
     async def run(self):
@@ -170,22 +170,24 @@ class SharedKeysHost:
             except Exception as e:
                 logger.exception(f"Exception during write to {path} (last_send_time: {time()-last_send_time:.2f}): {e}")
 
-    def handle_foreground_win_change(self, process: process_info):
-        self.active_window_pid = process.pid
-        if process.process != "explorer.exe": # nvim can be found as a descendant of explorer.exe, need to weed that out
-            self.active_nvim_pid = find_nvim_pid(process.pid)
+    def handle_foreground_win_change(self, process: process_info | None):
+        self.active_window_process = process
+        if self.active_window_process is None:
+            return
+        if self.active_window_process.process != "explorer.exe": # nvim can be found as a descendant of explorer.exe, need to weed that out
+            self.active_nvim_pids = find_nvim_pid(self.active_window_process.pid)
         else:
-            self.active_nvim_pid = None
-        if self.active_nvim_pid is not None:
-            logger.info(f"Found nvim {self.active_nvim_pid} as descendant of {process.process}, {process.pid}")
+            self.active_nvim_pids = None
+        if self.active_nvim_pids is not None:
+            logger.info(f"Found nvim(s) {self.active_nvim_pids} as descendant(s) of {self.active_window_process.process}, {self.active_window_process.pid}")
         else:
-            logger.info(f"Foreground window changed to: {process.process}, {process.pid}")
+            logger.info(f"Foreground window changed to: {self.active_window_process.process}, {self.active_window_process.pid}")
         keys = self.local_keys
-        if self.active_window_pid and (listener := NvimListeners.get(self.active_window_pid)):
+        if self.active_window_process.pid and (listener := NvimListeners.get(self.active_window_process.pid)):
             new_nvim_mode = listener.mode
             keys |= (1 << 30)
-        elif self.active_nvim_pid and (listener := NvimListeners.get(self.active_nvim_pid)):
-            new_nvim_mode = listener.mode
+        elif self.active_nvim_pids and (listeners := [NvimListeners[k] for k in self.active_nvim_pids if k in NvimListeners]):
+            new_nvim_mode = listeners[0].mode
             keys |= (1 << 30)
         else:
             new_nvim_mode = None
@@ -200,12 +202,16 @@ class SharedKeysHost:
             listener = NvimListener(platform, socket_path)
             self.tg.create_task(listener.listen(asyncio.get_running_loop(), self.nvim_mode_change_event)) # type: ignore
 
-    def nvim_mode_change_event(self, pid: int, mode: NvimEntryMode):
-        if pid == self.active_window_pid or pid == self.active_nvim_pid:
+    def nvim_mode_change_event(self, pid: int, mode: NvimEntryMode | None):
+        if pid == (self.active_window_process and self.active_window_process.pid) or (self.active_nvim_pids and pid in self.active_nvim_pids):
+            if mode is None:
+                self.active_nvim_pids = None
             keys = self.set_key_bit_from_nvim_entry_mode(self.local_keys, mode)
             if self.local_keys != keys:
                 self.local_keys = keys
                 self.process_shared_keys_report(HOST_KEY, self.local_keys)
+        else:
+            self.handle_foreground_win_change(self.active_window_process)
 
     def set_key_bit_from_nvim_entry_mode(self, keys: int, mode: NvimEntryMode | None) -> int:
         if mode == NvimEntryMode.Normal:
