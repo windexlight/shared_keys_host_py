@@ -21,6 +21,7 @@ OLE32 = ctypes.windll.ole32
 
 EVENT_SYSTEM_FOREGROUND = 0x0003
 WINEVENT_OUTOFCONTEXT = 0x0000
+OBJID_WINDOW = 0
 
 def get_process_info(hwnd) -> process_info:
     try:
@@ -34,9 +35,8 @@ def get_process_info(hwnd) -> process_info:
 def windows_event_worker(async_loop, event_queue: asyncio.Queue):
     OLE32.CoInitialize(None)
     def callback(hWinEventHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTime):
-        if hwnd:
-            info = get_process_info(hwnd)
-            async_loop.call_soon_threadsafe(event_queue.put_nowait, info)
+        if hwnd and idObject == OBJID_WINDOW:
+            async_loop.call_soon_threadsafe(event_queue.put_nowait, hwnd)
     WinEventProcType = ctypes.WINFUNCTYPE(
         None, ctypes.wintypes.HANDLE, ctypes.wintypes.DWORD, ctypes.wintypes.HWND,
         ctypes.wintypes.LONG, ctypes.wintypes.LONG, ctypes.wintypes.DWORD, ctypes.wintypes.DWORD
@@ -54,9 +54,22 @@ def windows_event_worker(async_loop, event_queue: asyncio.Queue):
         user32.DispatchMessageW(ctypes.byref(msg))
 
 async def process_window_events(event_queue: asyncio.Queue, callback: Callable[[process_info], None]):
-    callback(get_process_info(win32gui.GetForegroundWindow()))
+    last_info = get_process_info(win32gui.GetForegroundWindow())
+    callback(last_info)
     while True:
-        callback(await event_queue.get())
+        await event_queue.get()
+        await asyncio.sleep(0.1)
+        while not event_queue.empty():
+            event_queue.get_nowait()
+            event_queue.task_done()
+        actual_hwnd = win32gui.GetForegroundWindow()
+        info = get_process_info(actual_hwnd)
+        # if info.process and info.process.lower() == "explorer.exe" and not info.title:
+        #     event_queue.task_done()
+        #     continue
+        if info.pid != last_info.pid or info.title != last_info.title:
+            callback(info)
+            last_info = info
         event_queue.task_done()
 
 def find_nvim_pid(terminal_pid):
