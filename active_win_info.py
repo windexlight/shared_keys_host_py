@@ -72,6 +72,8 @@ async def process_window_events(event_queue: asyncio.Queue, callback: Callable[[
             last_info = info
         event_queue.task_done()
 
+# TODO -- This will stop finding nvim at a descendant if :restart is used. May be able to try using GetConsoleProcessList, but that's probably brittle as well.
+# :restart doesn't work in Neovide anyway (just exits), and is new as of nvim 0.12, so it's probably not the end of the world to just not use it.
 def find_nvim_pid(terminal_pid):
     nvims = []
     try:
