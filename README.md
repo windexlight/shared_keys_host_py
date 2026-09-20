@@ -12,6 +12,7 @@ python -m pip install hidapi
 python -m pip install pywin32
 python -m pip install psutil
 python -m pip install msgpack
+python -m pip install keyboard
 ```
 
 #### To set up as a task that runs at logon and remains running until shutdown:
