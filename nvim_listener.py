@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import re
-from typing import Callable, Dict
+from typing import Callable, Dict, Tuple
 from enum import Enum, auto
 import msgpack
 
@@ -24,14 +24,14 @@ class NvimEntryMode(Enum):
 CREATE_NO_WINDOW = 0x08000000
 
 WSL_SOCKET_DIR = "/tmp"
-WSL_SOCKET_FILENAME_PATTERN = re.compile(r"^nvim-win-([0-9]+)\.sock$")
-WSL_SOCKET_FULL_PATH_PATTERN = re.compile(fr"^{WSL_SOCKET_DIR}/nvim-win-([0-9]+)\.sock$")
+WSL_SOCKET_FILENAME_PATTERN = re.compile(r"^nvim-wsl-([0-9]+)\.sock$")
+WSL_SOCKET_FULL_PATH_PATTERN = re.compile(fr"^{WSL_SOCKET_DIR}/nvim-wsl-([0-9]+)\.sock$")
 
 WIN_PIPE_DIR = r"\\.\pipe"
 WIN_PIPE_FILENAME_PATTERN = re.compile(r"^nvim-win-([0-9]+)$")
 WIN_PIPE_FULL_PATH_PATTERN = re.compile(fr"^{re.escape(WIN_PIPE_DIR)}\\nvim-win-([0-9]+)$")
 
-NvimListeners: Dict[int, NvimListener] = {}
+NvimListeners: Dict[Tuple[NvimListenerPlatform, int], NvimListener] = {}
 
 def nvim_entry_mode_from_string(mode_string: str):
     if mode_string.startswith(("n", "v", "V", "\x16")):
@@ -60,42 +60,42 @@ class NvimListener():
             logger.error(f"Pid not found in socket path {socket_path}")
             self.platform = NvimListenerPlatform.Unsupported
             return
-        if self.pid in NvimListeners:
-            logger.error(f"Listener already exists: {self.pid}")
+        if (self.platform, self.pid) in NvimListeners:
+            logger.error(f"Listener already exists: {self.platform}, {self.pid}")
             self.platform = NvimListenerPlatform.Unsupported
         else:
-            NvimListeners[self.pid] = self
+            NvimListeners[self.platform, self.pid] = self
 
-    async def listen(self, async_loop, callback: Callable[[int, NvimEntryMode | None], None]):
+    async def listen(self, async_loop, mode_change: Callable[[NvimEntryMode | None], None]):
         match self.platform:
             case NvimListenerPlatform.Win:
-                await self.listen_win(async_loop, callback)
+                await self.listen_win(async_loop, mode_change)
             case NvimListenerPlatform.Wsl:
-                await self.listen_wsl(callback)
+                await self.listen_wsl(mode_change)
             case _:
                 logger.error(f"Bad platform: {self.platform}")
 
-    async def listen_win(self, async_loop, callback: Callable[[int, NvimEntryMode | None], None]):
+    async def listen_win(self, async_loop, mode_change: Callable[[NvimEntryMode | None], None]):
         logger.info(f"Starting listener for {self.socket_path}")
         try:
             def read_pipe():
                 with open(self.socket_path, 'r+b', buffering=0) as pipe:
-                    self.query_current_mode_win(async_loop, pipe, callback)
+                    self.query_current_mode_win(async_loop, pipe, mode_change)
                     unpacker = msgpack.Unpacker(raw=False)
                     while True:
                         chunk = pipe.read(1024)
                         if not chunk:
                             break
                         unpacker.feed(chunk)
-                        self.handle_nvim_msgpack(unpacker, lambda pid, mode: async_loop.call_soon_threadsafe(callback, pid, mode))
+                        self.handle_nvim_msgpack(unpacker, lambda pid, mode: async_loop.call_soon_threadsafe(mode_change, pid, mode))
             await asyncio.to_thread(read_pipe)
         except Exception as e:
             logger.error(f"Error in {self.socket_path} listener: {e}")
-        del NvimListeners[self.pid]
+        del NvimListeners[self.platform, self.pid]
         logger.info(f"Listener for {self.socket_path} stopped")
-        async_loop.call_soon_threadsafe(callback, self.pid, None)
+        async_loop.call_soon_threadsafe(mode_change, self.pid, None)
 
-    async def listen_wsl(self, callback: Callable[[int, NvimEntryMode | None], None]):
+    async def listen_wsl(self, mode_change: Callable[[NvimEntryMode | None], None]):
         try:
             process = await asyncio.create_subprocess_exec(
                 "wsl.exe", "-e", "nc", "-U", self.socket_path,
@@ -104,19 +104,19 @@ class NvimListener():
                 creationflags=CREATE_NO_WINDOW,
             )
             logger.info(f"Starting listener for {self.socket_path}")
-            await self.query_current_mode_wsl(process.stdout, process.stdin, callback)
+            await self.query_current_mode_wsl(process.stdout, process.stdin, mode_change)
             unpacker = msgpack.Unpacker(raw=False)
             while True:
                 chunk = await process.stdout.read(1024) # type: ignore
                 if not chunk:
                     break
                 unpacker.feed(chunk)
-                self.handle_nvim_msgpack(unpacker, lambda pid, mode: callback(pid, mode))
+                self.handle_nvim_msgpack(unpacker, lambda mode: mode_change(mode))
         except Exception as e:
             logger.info(f"Error in {self.socket_path} listener: {e}")
-        del NvimListeners[self.pid]
+        del NvimListeners[self.platform, self.pid]
         logger.info(f"Listener for {self.socket_path} stopped")
-        callback(self.pid, None)
+        mode_change(None)
 
     def handle_nvim_msgpack(self, unpacker, callback):
         for msg in unpacker:
@@ -126,6 +126,9 @@ class NvimListener():
                 if method == "mode_change":
                     logger.info(f"{self.socket_path} mode changed to: {args[0]}")
                     self.mode = nvim_entry_mode_from_string(args[0])
+                elif method == "focus_change":
+                    if args[0] == "gain":
+                    elif args[0] == "lose":
                 elif method == "flash_mode":
                     if args[0] == "t":
                         self.flash_mode = True
@@ -136,7 +139,7 @@ class NvimListener():
                     self.last_reported_mode = mode_to_report
                     callback(self.pid, mode_to_report)
 
-    def query_current_mode_win(self, async_loop, pipe, callback: Callable[[int, NvimEntryMode | None], None]):
+    def query_current_mode_win(self, async_loop, pipe, callback: Callable[[NvimEntryMode | None], None]):
         try:
             req_id = 1
             request = [0, req_id, "nvim_get_mode", []]
@@ -164,7 +167,7 @@ class NvimListener():
         except Exception as e:
             logger.error(f"Failed during initial startup mode query to {self.socket_path}: {e}")
 
-    async def query_current_mode_wsl(self, reader, writer, callback: Callable[[int, NvimEntryMode], None]):
+    async def query_current_mode_wsl(self, reader, writer, callback: Callable[[NvimEntryMode], None]):
         try:
             req_id = 1
             request = [0, req_id, "nvim_get_mode", []]
