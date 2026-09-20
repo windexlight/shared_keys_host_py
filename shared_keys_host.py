@@ -4,8 +4,10 @@ import sys
 from dataclasses import dataclass
 import logging
 from time import time
+import keyboard
 from active_win_info import process_window_events, windows_event_worker, process_info, find_nvim_pid
-from nvim_listener import NvimListener, watch_wsl_sockets, watch_windows_pipes, NvimListenerPlatform, NvimInstanceEvent, NvimEntryMode, NvimListeners
+from nvim_listener import (NvimListener, watch_wsl_sockets, watch_windows_pipes, NvimListenerPlatform,
+                           NvimInstanceEvent, NvimEntryMode, NvimWinListeners, NvimWslListeners)
 
 last_send_time = 0
 
@@ -116,8 +118,8 @@ class SharedKeysHost:
         global last_send_time
         while True:
             for path, dev in self.devs.items():
+                write_start = time()
                 try:
-                    write_start = time()
                     if (cnt := dev.write(bytes(self.get_shared_keys_report))) < 0:
                         logger.error(f"Write to {path} returned error (last_send_time: {time()-last_send_time:.2f}): {dev.error()}")
                     if cnt != len(self.get_shared_keys_report):
@@ -183,47 +185,52 @@ class SharedKeysHost:
         else:
             logger.info(f"Foreground window changed to: {self.active_window_process.process}, {self.active_window_process.pid}")
         keys = self.local_keys
-        if self.active_window_process.pid and (listener := NvimListeners.get(self.active_window_process.pid)):
-            new_nvim_mode = listener.mode
-            keys |= (1 << 30)
-        elif self.active_nvim_pids and (listeners := [NvimListeners[k] for k in self.active_nvim_pids if k in NvimListeners]):
+        if self.active_nvim_pids and (listeners := [NvimWinListeners[k] for k in self.active_nvim_pids if k in NvimWinListeners]):
+            logger.info("Found listener in NvimWinListeners")
             new_nvim_mode = listeners[0].mode
             keys |= (1 << 30)
         else:
             new_nvim_mode = None
-            keys &= ~(1 << 30)
-        keys = self.set_key_bit_from_nvim_entry_mode(keys, new_nvim_mode)
-        if self.local_keys != keys:
-            self.local_keys = keys
-            self.process_shared_keys_report(HOST_KEY, self.local_keys)
+            found = False
+            for listener in NvimWslListeners.values():
+                if listener.ancestry is not None:
+                    for ancestor in listener.ancestry:
+                        if ancestor.get("pid") == self.active_window_process.pid:
+                            logger.info("Found listener in NvimWslListeners")
+                            listener.win_pid = self.active_window_process.pid
+                            new_nvim_mode = listener.mode
+                            keys |= (1 << 30)
+                            found = True
+            if not found:
+                keys &= ~(1 << 30)
+        self.handle_nvim_mode_change(keys, new_nvim_mode)
 
     def nvim_instance_event(self, platform: NvimListenerPlatform, event: NvimInstanceEvent, socket_path: str):
         if event == NvimInstanceEvent.Started:
-            listener = NvimListener(platform, socket_path)
-            self.tg.create_task(listener.listen(asyncio.get_running_loop(), self.nvim_mode_change_event)) # type: ignore
+            listener = NvimListener(platform, socket_path, self.nvim_mode_change_event)
+            self.tg.create_task(listener.listen(asyncio.get_running_loop())) # type: ignore
 
     def nvim_mode_change_event(self, pid: int, mode: NvimEntryMode | None):
-        if pid == (self.active_window_process and self.active_window_process.pid) or (self.active_nvim_pids and pid in self.active_nvim_pids):
+        if pid == (self.active_window_process and self.active_window_process.pid) or \
+            (self.active_nvim_pids and pid in self.active_nvim_pids):
             if mode is None:
                 self.active_nvim_pids = None
-            keys = self.set_key_bit_from_nvim_entry_mode(self.local_keys, mode)
-            if self.local_keys != keys:
-                self.local_keys = keys
-                self.process_shared_keys_report(HOST_KEY, self.local_keys)
+            self.handle_nvim_mode_change(self.local_keys, mode)
         else:
             self.handle_foreground_win_change(self.active_window_process)
 
-    def set_key_bit_from_nvim_entry_mode(self, keys: int, mode: NvimEntryMode | None) -> int:
+    def handle_nvim_mode_change(self, keys: int, mode: NvimEntryMode | None):
         if mode == NvimEntryMode.Normal:
             keys |= (1 << 31)
         else:
             keys &= ~(1 << 31)
-        return keys
-
+        if self.local_keys != keys:
+            self.local_keys = keys
+            self.process_shared_keys_report(HOST_KEY, self.local_keys)
 
 if __name__ == "__main__":
     logger.info("Application starting")
- 
+
     host = SharedKeysHost()
     try:
         asyncio.run(host.run()) #, debug=True)
