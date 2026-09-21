@@ -5,6 +5,7 @@ import re
 from typing import Callable, Dict, Tuple
 from enum import Enum, auto
 import msgpack
+import keyboard
 
 logger = logging.getLogger("app_logger")
 
@@ -76,6 +77,7 @@ class NvimListener():
             def read_pipe():
                 with open(self.socket_path, 'r+b', buffering=0) as pipe:
                     self.query_current_mode_win(async_loop, pipe, mode_change)
+                    keyboard.send("f24") # Used to trigger a focus gained notification
                     unpacker = msgpack.Unpacker(raw=False)
                     while True:
                         chunk = pipe.read(1024)
@@ -102,6 +104,7 @@ class NvimListener():
             )
             logger.info(f"Starting listener for {self.socket_path}")
             await self.query_current_mode_wsl(process.stdout, process.stdin, mode_change)
+            keyboard.send("f24") # Used to trigger a focus gained notification
             unpacker = msgpack.Unpacker(raw=False)
             while True:
                 chunk = await process.stdout.read(1024) # type: ignore
