@@ -61,23 +61,25 @@ class NvimListener():
             self.platform = NvimListenerPlatform.Unsupported
             return
 
-    async def listen(self, async_loop, mode_change: Callable[[NvimEntryMode | None], None]):
+    async def listen(self, async_loop, mode_change: Callable[[NvimEntryMode | None], None], send_focus_fishing_key: Callable[[], None]):
         match self.platform:
             case NvimListenerPlatform.Win:
-                await self.listen_win(async_loop, mode_change)
+                await self.listen_win(async_loop, mode_change, send_focus_fishing_key)
             case NvimListenerPlatform.Wsl:
-                await self.listen_wsl(mode_change)
+                await self.listen_wsl(mode_change, send_focus_fishing_key)
             case _:
                 logger.error(f"Bad platform: {self.platform}")
 
-    async def listen_win(self, async_loop, mode_change: Callable[[NvimEntryMode | None], None]):
+    async def listen_win(self, async_loop, mode_change: Callable[[NvimEntryMode | None], None], send_focus_fishing_key: Callable[[], None]):
         global current_focus
         logger.info(f"Starting listener for {self.socket_path}")
+        # await asyncio.sleep(2)
         try:
             def read_pipe():
                 with open(self.socket_path, 'r+b', buffering=0) as pipe:
                     self.query_current_mode_win(async_loop, pipe, mode_change)
-                    keyboard.send("f24") # Used to trigger a focus gained notification
+                    # keyboard.send("f9")
+                    async_loop.call_soon_threadsafe(send_focus_fishing_key)
                     unpacker = msgpack.Unpacker(raw=False)
                     while True:
                         chunk = pipe.read(1024)
@@ -93,7 +95,7 @@ class NvimListener():
             current_focus = None
         async_loop.call_soon_threadsafe(mode_change, None)
 
-    async def listen_wsl(self, mode_change: Callable[[NvimEntryMode | None], None]):
+    async def listen_wsl(self, mode_change: Callable[[NvimEntryMode | None], None], send_focus_fishing_key: Callable[[], None]):
         global current_focus
         try:
             process = await asyncio.create_subprocess_exec(
@@ -104,7 +106,8 @@ class NvimListener():
             )
             logger.info(f"Starting listener for {self.socket_path}")
             await self.query_current_mode_wsl(process.stdout, process.stdin, mode_change)
-            keyboard.send("f24") # Used to trigger a focus gained notification
+            # keyboard.send("f24") # Used to trigger a focus gained notification
+            send_focus_fishing_key()
             unpacker = msgpack.Unpacker(raw=False)
             while True:
                 chunk = await process.stdout.read(1024) # type: ignore
