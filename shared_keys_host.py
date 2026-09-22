@@ -49,8 +49,6 @@ class SharedKeysHost:
         report_data = [0x00] * (RAW_HID_REPORT_LEN + 1) # First byte is Report ID, it's not sent to the device
         report_data[1] = 0xC0
         self.get_shared_keys_report = bytes(report_data)
-        report_data[1] = 0xC2
-        self.send_f24_report = bytes(report_data)
         report_data[1] = 0xC1
         self.report_data = report_data
         self.down = False
@@ -172,18 +170,7 @@ class SharedKeysHost:
     def nvim_instance_event(self, platform: NvimListenerPlatform, event: NvimInstanceEvent, socket_path: str):
         if event == NvimInstanceEvent.Started:
             listener = NvimListener(platform, socket_path)
-            self.tg.create_task(listener.listen(asyncio.get_running_loop(), self.nvim_mode_change_event, self.send_focus_fishing_key)) # type: ignore
-
-    def send_focus_fishing_key(self):
-        for path, dev in self.devs.items():
-            try:
-                write_start = time()
-                dev.write(self.send_f24_report)
-                took = time() - write_start
-                if (took) > 0.5:
-                    logger.warning(f"Write took a long time (send_focus_fishing_key): {took}")
-            except Exception as e:
-                logger.exception(f"Exception during write to {path} (last_send_time: {time()-last_send_time:.2f}): {e}")
+            self.tg.create_task(listener.listen(asyncio.get_running_loop(), self.nvim_mode_change_event)) # type: ignore
 
     def nvim_mode_change_event(self, mode: NvimEntryMode | None):
         keys = self.set_key_bit_from_nvim_entry_mode(self.local_keys, mode)
