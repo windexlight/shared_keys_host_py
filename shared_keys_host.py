@@ -173,17 +173,18 @@ class SharedKeysHost:
             self.tg.create_task(listener.listen(asyncio.get_running_loop(), self.nvim_mode_change_event)) # type: ignore
 
     def nvim_mode_change_event(self, mode: NvimEntryMode | None):
-        keys = self.set_key_bit_from_nvim_entry_mode(self.local_keys, mode)
+        keys = self.local_keys
+        if mode is None:
+            keys &= ~(3 << 30)
+        else:
+            keys |= (1 << 30)
+            if mode == NvimEntryMode.Normal:
+                keys |= (1 << 31)
+            else:
+                keys &= ~(1 << 31)
         if self.local_keys != keys:
             self.local_keys = keys
             self.process_shared_keys_report(HOST_KEY, self.local_keys)
-
-    def set_key_bit_from_nvim_entry_mode(self, keys: int, mode: NvimEntryMode | None) -> int:
-        if mode == NvimEntryMode.Normal:
-            keys |= (1 << 31)
-        else:
-            keys &= ~(1 << 31)
-        return keys
 
 if __name__ == "__main__":
     logger.info("Application starting")
