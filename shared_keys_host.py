@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import logging
 from time import time
 from active_win_info import process_window_events, windows_event_worker, process_info, find_nvim_pid
-from nvim_listener import NvimListener, watch_wsl_sockets, watch_windows_pipes, NvimListenerPlatform, NvimInstanceEvent, NvimEntryMode
+from nvim_listener import NvimListener, watch_wsl_sockets, watch_windows_pipes, NvimListenerPlatform, NvimInstanceEvent, NvimEntryMode, NvimListeners
 
 last_send_time = 0
 
@@ -54,6 +54,7 @@ class SharedKeysHost:
         self.down = False
         self.tg = None
         self.active_window_process = None
+        self.active_nvim_pids = None
         self.local_keys = 0
 
     async def run(self):
@@ -201,19 +202,23 @@ class SharedKeysHost:
             listener = NvimListener(platform, socket_path)
             self.tg.create_task(listener.listen(asyncio.get_running_loop(), self.nvim_mode_change_event)) # type: ignore
 
-    def nvim_mode_change_event(self, mode: NvimEntryMode | None):
-        keys = self.local_keys
-        if mode is None:
-            keys &= ~(3 << 30)
+    def nvim_mode_change_event(self, pid: int, mode: NvimEntryMode | None):
+        if pid == (self.active_window_process and self.active_window_process.pid) or (self.active_nvim_pids and pid in self.active_nvim_pids):
+            if mode is None:
+                self.active_nvim_pids = None
+            keys = self.set_key_bit_from_nvim_entry_mode(self.local_keys, mode)
+            if self.local_keys != keys:
+                self.local_keys = keys
+                self.process_shared_keys_report(HOST_KEY, self.local_keys)
         else:
-            keys |= (1 << 30)
-            if mode == NvimEntryMode.Normal:
-                keys |= (1 << 31)
-            else:
-                keys &= ~(1 << 31)
-        if self.local_keys != keys:
-            self.local_keys = keys
-            self.process_shared_keys_report(HOST_KEY, self.local_keys)
+            self.handle_foreground_win_change(self.active_window_process)
+
+    def set_key_bit_from_nvim_entry_mode(self, keys: int, mode: NvimEntryMode | None) -> int:
+        if mode == NvimEntryMode.Normal:
+            keys |= (1 << 31)
+        else:
+            keys &= ~(1 << 31)
+        return keys
 
 if __name__ == "__main__":
     logger.info("Application starting")
