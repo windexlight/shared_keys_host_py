@@ -32,7 +32,9 @@ WIN_PIPE_DIR = r"\\.\pipe"
 WIN_PIPE_FILENAME_PATTERN = re.compile(r"^nvim-win-([0-9]+)$")
 WIN_PIPE_FULL_PATH_PATTERN = re.compile(fr"^{re.escape(WIN_PIPE_DIR)}\\nvim-win-([0-9]+)$")
 
-NvimListeners: Dict[int, NvimListener] = {}
+NvimWinListeners: Dict[int, NvimListener] = {}
+NvimWslListenersByWslPid: Dict[int, NvimListener] = {}
+NvimWslListenersByWinPid: Dict[int, NvimListener] = {}
 
 def nvim_entry_mode_from_string(mode_string: str):
     if mode_string.startswith(("n", "v", "V", "\x16")):
@@ -46,6 +48,7 @@ class NvimListener():
         self.platform = platform
         self.mode = NvimEntryMode.Insert
         self.last_reported_mode = None
+        self.win_pid = None
         match self.platform:
             case NvimListenerPlatform.Win:
                 m = WIN_PIPE_FULL_PATH_PATTERN.search(socket_path)
@@ -60,11 +63,19 @@ class NvimListener():
             logger.error(f"Pid not found in socket path {socket_path}")
             self.platform = NvimListenerPlatform.Unsupported
             return
-        if self.pid in NvimListeners:
-            logger.error(f"Listener already exists: {self.pid}")
-            self.platform = NvimListenerPlatform.Unsupported
-        else:
-            NvimListeners[self.pid] = self
+        match self.platform:
+            case NvimListenerPlatform.Win:
+                if self.pid in NvimWinListeners:
+                    logger.error(f"Listener already exists: {self.pid}")
+                    self.platform = NvimListenerPlatform.Unsupported
+                else:
+                    NvimWinListeners[self.pid] = self
+            case NvimListenerPlatform.Wsl:
+                if self.pid in NvimWslListenersByWslPid:
+                    logger.error(f"Listener already exists: {self.pid}")
+                    self.platform = NvimListenerPlatform.Unsupported
+                else:
+                    NvimWslListenersByWslPid[self.pid] = self
 
     async def listen(self, async_loop, mode_change: Callable[[int, NvimEntryMode | None], None]):
         match self.platform:
@@ -92,7 +103,7 @@ class NvimListener():
             await asyncio.to_thread(read_pipe)
         except Exception as e:
             logger.error(f"Error in {self.socket_path} listener: {e}")
-        del NvimListeners[self.pid]
+        del NvimWinListeners[self.pid]
         logger.info(f"Listener for {self.socket_path} stopped")
         async_loop.call_soon_threadsafe(mode_change, self.pid, None)
 
@@ -116,7 +127,10 @@ class NvimListener():
                 self.handle_nvim_msgpack(unpacker, lambda pid, mode: mode_change(pid, mode))
         except Exception as e:
             logger.info(f"Error in {self.socket_path} listener: {e}")
-        del NvimListeners[self.pid]
+        del NvimWslListenersByWslPid[self.pid]
+        if self.win_pid is not None:
+            if self.win_pid in NvimWslListenersByWinPid:
+                del NvimWslListenersByWinPid[self.win_pid]
         logger.info(f"Listener for {self.socket_path} stopped")
         mode_change(self.pid, None)
 

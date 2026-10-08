@@ -5,7 +5,8 @@ from dataclasses import dataclass
 import logging
 from time import time
 from active_win_info import process_window_events, windows_event_worker, process_info, find_nvim_pid
-from nvim_listener import NvimListener, watch_wsl_sockets, watch_windows_pipes, NvimListenerPlatform, NvimInstanceEvent, NvimEntryMode, NvimListeners
+from nvim_listener import (NvimListener, watch_wsl_sockets, watch_windows_pipes, NvimListenerPlatform,
+                           NvimInstanceEvent, NvimEntryMode, NvimWinListeners, NvimWslListenersByWslPid, NvimWslListenersByWinPid)
 
 last_send_time = 0
 
@@ -183,6 +184,7 @@ class SharedKeysHost:
         else:
             logger.info(f"Foreground window changed to: {self.active_window_process.process}, {self.active_window_process.pid}")
         keys = self.local_keys
+        # TODO - update for split listeners dicts, and with new logic for finding WSL instances
         if self.active_window_process.pid and (listener := NvimListeners.get(self.active_window_process.pid)):
             new_nvim_mode = listener.mode
             keys |= (1 << 30)
