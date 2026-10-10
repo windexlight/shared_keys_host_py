@@ -195,40 +195,43 @@ class SharedKeysHost:
             keys |= (1 << 30)
         else:
             if not self.active_nvim_pids and (len(NvimWslListenersByWinPid) < len(NvimWslListenersByWslPid)):
-                keyboard.send("ctrl+alt+shift+f12") # Attempt to trigger response from nvim
                 self.waiting_for_nvim_response = True
+                keyboard.send("ctrl+alt+shift+f12") # Attempt to trigger response from nvim
             new_nvim_mode = None
             keys &= ~(1 << 30)
-        keys = self.set_key_bit_from_nvim_entry_mode(keys, new_nvim_mode)
-        if self.local_keys != keys:
-            self.local_keys = keys
-            self.process_shared_keys_report(HOST_KEY, self.local_keys)
+        self.handle_nvim_mode_change(keys, new_nvim_mode)
 
     def nvim_instance_event(self, platform: NvimListenerPlatform, event: NvimInstanceEvent, socket_path: str):
         if event == NvimInstanceEvent.Started:
             listener = NvimListener(platform, socket_path, self.nvim_mode_change_event, self.nvim_ack_event)
             self.tg.create_task(listener.listen(asyncio.get_running_loop())) # type: ignore
 
-    def nvim_ack_event(self, pid: int):
-        pass # TODO
+    def nvim_ack_event(self, listener: NvimListener):
+        if self.waiting_for_nvim_response:
+            self.waiting_for_nvim_response = False
+            if self.active_window_process and self.active_window_process.pid is int:
+                if self.active_window_process.pid not in NvimWslListenersByWinPid:
+                    NvimWslListenersByWinPid[self.active_window_process.pid] = listener
+                    listener.win_pid = self.active_window_process.pid
+                    self.handle_nvim_mode_change(self.local_keys, listener.mode)
 
     def nvim_mode_change_event(self, pid: int, mode: NvimEntryMode | None):
-        if pid == (self.active_window_process and self.active_window_process.pid) or (self.active_nvim_pids and pid in self.active_nvim_pids):
+        if pid == (self.active_window_process and self.active_window_process.pid) or \
+            (self.active_nvim_pids and pid in self.active_nvim_pids):
             if mode is None:
                 self.active_nvim_pids = None
-            keys = self.set_key_bit_from_nvim_entry_mode(self.local_keys, mode)
-            if self.local_keys != keys:
-                self.local_keys = keys
-                self.process_shared_keys_report(HOST_KEY, self.local_keys)
+            self.handle_nvim_mode_change(self.local_keys, mode)
         else:
             self.handle_foreground_win_change(self.active_window_process)
 
-    def set_key_bit_from_nvim_entry_mode(self, keys: int, mode: NvimEntryMode | None) -> int:
+    def handle_nvim_mode_change(self, keys: int, mode: NvimEntryMode | None):
         if mode == NvimEntryMode.Normal:
             keys |= (1 << 31)
         else:
             keys &= ~(1 << 31)
-        return keys
+        if self.local_keys != keys:
+            self.local_keys = keys
+            self.process_shared_keys_report(HOST_KEY, self.local_keys)
 
 if __name__ == "__main__":
     logger.info("Application starting")

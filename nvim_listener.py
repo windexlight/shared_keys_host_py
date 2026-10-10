@@ -45,7 +45,7 @@ def nvim_entry_mode_from_string(mode_string: str):
 class NvimListener():
     def __init__(self, platform: NvimListenerPlatform, socket_path: str,
                  mode_change: Callable[[int, NvimEntryMode | None], None],
-                 ack: Callable[[int], None]):
+                 ack: Callable[[NvimListener], None]):
         self.socket_path = socket_path
         self.platform = platform
         self.mode_change = mode_change
@@ -96,6 +96,7 @@ class NvimListener():
             def read_pipe():
                 with open(self.socket_path, 'r+b', buffering=0) as pipe:
                     self.query_current_mode_win(async_loop, pipe, self.mode_change)
+                    keyboard.send("ctrl+alt+shift+f12") # Attempt to trigger response from nvim
                     unpacker = msgpack.Unpacker(raw=False)
                     while True:
                         chunk = pipe.read(1024)
@@ -104,7 +105,7 @@ class NvimListener():
                         unpacker.feed(chunk)
                         self.handle_nvim_msgpack(unpacker,
                                                  lambda pid, mode: async_loop.call_soon_threadsafe(self.mode_change, pid, mode),
-                                                 lambda pid: async_loop.call_soon_threadsafe(self.ack, pid))
+                                                 lambda listener: async_loop.call_soon_threadsafe(self.ack, listener))
             await asyncio.to_thread(read_pipe)
         except Exception as e:
             logger.error(f"Error in {self.socket_path} listener: {e}")
@@ -122,6 +123,7 @@ class NvimListener():
             )
             logger.info(f"Starting listener for {self.socket_path}")
             await self.query_current_mode_wsl(process.stdout, process.stdin, self.mode_change)
+            keyboard.send("ctrl+alt+shift+f12") # Attempt to trigger response from nvim
             unpacker = msgpack.Unpacker(raw=False)
             while True:
                 chunk = await process.stdout.read(1024) # type: ignore
@@ -148,10 +150,10 @@ class NvimListener():
                     self.mode = nvim_entry_mode_from_string(args[0])
                 elif method == "ack": # TODO - Add this to nvim config
                     logging.info(f"got ack from {self.socket_path}")
-                    ack(self.pid)
+                    ack(self)
                 if self.mode != self.last_reported_mode:
                     self.last_reported_mode = self.mode
-                    mode_change(self.pid, self.mode)
+                    mode_change(self.win_pid or self.pid, self.mode)
 
     def query_current_mode_win(self, async_loop, pipe, mode_change: Callable[[int, NvimEntryMode | None], None]):
         try:
