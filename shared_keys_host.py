@@ -58,7 +58,6 @@ class SharedKeysHost:
         self.active_window_process = None
         self.active_nvim_pids = None
         self.local_keys = 0
-        self.waiting_for_nvim_response = False
 
     async def run(self):
         event_queue = asyncio.Queue()
@@ -174,7 +173,6 @@ class SharedKeysHost:
                 logger.exception(f"Exception during write to {path} (last_send_time: {time()-last_send_time:.2f}): {e}")
 
     def handle_foreground_win_change(self, process: process_info | None):
-        self.waiting_for_nvim_response = False
         self.active_window_process = process
         if self.active_window_process is None:
             return
@@ -195,7 +193,6 @@ class SharedKeysHost:
             keys |= (1 << 30)
         else:
             if not self.active_nvim_pids and (len(NvimWslListenersByWinPid) < len(NvimWslListenersByWslPid)):
-                self.waiting_for_nvim_response = True
                 keyboard.send("ctrl+alt+shift+f12") # Attempt to trigger response from nvim
             new_nvim_mode = None
             keys &= ~(1 << 30)
@@ -207,13 +204,11 @@ class SharedKeysHost:
             self.tg.create_task(listener.listen(asyncio.get_running_loop())) # type: ignore
 
     def nvim_ack_event(self, listener: NvimListener):
-        if self.waiting_for_nvim_response:
-            self.waiting_for_nvim_response = False
-            if self.active_window_process and self.active_window_process.pid is int:
-                if self.active_window_process.pid not in NvimWslListenersByWinPid:
-                    NvimWslListenersByWinPid[self.active_window_process.pid] = listener
-                    listener.win_pid = self.active_window_process.pid
-                    self.handle_nvim_mode_change(self.local_keys, listener.mode)
+        if self.active_window_process and self.active_window_process.pid is int:
+            if self.active_window_process.pid not in NvimWslListenersByWinPid:
+                NvimWslListenersByWinPid[self.active_window_process.pid] = listener
+                listener.win_pid = self.active_window_process.pid
+                self.handle_nvim_mode_change(self.local_keys, listener.mode)
 
     def nvim_mode_change_event(self, pid: int, mode: NvimEntryMode | None):
         if pid == (self.active_window_process and self.active_window_process.pid) or \
