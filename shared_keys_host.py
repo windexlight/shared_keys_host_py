@@ -206,8 +206,11 @@ class SharedKeysHost:
 
     def nvim_instance_event(self, platform: NvimListenerPlatform, event: NvimInstanceEvent, socket_path: str):
         if event == NvimInstanceEvent.Started:
-            listener = NvimListener(platform, socket_path)
-            self.tg.create_task(listener.listen(asyncio.get_running_loop(), self.nvim_mode_change_event)) # type: ignore
+            listener = NvimListener(platform, socket_path, self.nvim_mode_change_event, self.nvim_ack_event)
+            self.tg.create_task(listener.listen(asyncio.get_running_loop())) # type: ignore
+
+    def nvim_ack_event(self, pid: int):
+        pass # TODO
 
     def nvim_mode_change_event(self, pid: int, mode: NvimEntryMode | None):
         if pid == (self.active_window_process and self.active_window_process.pid) or (self.active_nvim_pids and pid in self.active_nvim_pids):
