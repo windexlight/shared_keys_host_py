@@ -4,6 +4,7 @@ import sys
 from dataclasses import dataclass
 import logging
 from time import time
+import keyboard
 from active_win_info import process_window_events, windows_event_worker, process_info, find_nvim_pid
 from nvim_listener import (NvimListener, watch_wsl_sockets, watch_windows_pipes, NvimListenerPlatform,
                            NvimInstanceEvent, NvimEntryMode, NvimWinListeners, NvimWslListenersByWslPid, NvimWslListenersByWinPid)
@@ -57,6 +58,7 @@ class SharedKeysHost:
         self.active_window_process = None
         self.active_nvim_pids = None
         self.local_keys = 0
+        self.waiting_for_nvim_response = False
 
     async def run(self):
         event_queue = asyncio.Queue()
@@ -172,6 +174,7 @@ class SharedKeysHost:
                 logger.exception(f"Exception during write to {path} (last_send_time: {time()-last_send_time:.2f}): {e}")
 
     def handle_foreground_win_change(self, process: process_info | None):
+        self.waiting_for_nvim_response = False
         self.active_window_process = process
         if self.active_window_process is None:
             return
@@ -184,14 +187,16 @@ class SharedKeysHost:
         else:
             logger.info(f"Foreground window changed to: {self.active_window_process.process}, {self.active_window_process.pid}")
         keys = self.local_keys
-        # TODO - update for split listeners dicts, and with new logic for finding WSL instances
-        if self.active_window_process.pid and (listener := NvimListeners.get(self.active_window_process.pid)):
+        if self.active_window_process.pid and (listener := NvimWslListenersByWinPid.get(self.active_window_process.pid)):
             new_nvim_mode = listener.mode
             keys |= (1 << 30)
-        elif self.active_nvim_pids and (listeners := [NvimListeners[k] for k in self.active_nvim_pids if k in NvimListeners]):
+        elif self.active_nvim_pids and (listeners := [NvimWinListeners[k] for k in self.active_nvim_pids if k in NvimWinListeners]):
             new_nvim_mode = listeners[0].mode
             keys |= (1 << 30)
         else:
+            if not self.active_nvim_pids and (len(NvimWslListenersByWinPid) < len(NvimWslListenersByWslPid)):
+                keyboard.send("ctrl+alt+shift+f12") # Attempt to trigger response from nvim
+                self.waiting_for_nvim_response = True
             new_nvim_mode = None
             keys &= ~(1 << 30)
         keys = self.set_key_bit_from_nvim_entry_mode(keys, new_nvim_mode)

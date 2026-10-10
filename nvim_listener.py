@@ -43,9 +43,13 @@ def nvim_entry_mode_from_string(mode_string: str):
         return NvimEntryMode.Insert
 
 class NvimListener():
-    def __init__(self, platform: NvimListenerPlatform, socket_path: str):
+    def __init__(self, platform: NvimListenerPlatform, socket_path: str,
+                 mode_change: Callable[[int, NvimEntryMode | None], None],
+                 ack: Callable[[int], None]):
         self.socket_path = socket_path
         self.platform = platform
+        self.mode_change = mode_change
+        self.ack = ack
         self.mode = NvimEntryMode.Insert
         self.last_reported_mode = None
         self.win_pid = None
@@ -77,37 +81,38 @@ class NvimListener():
                 else:
                     NvimWslListenersByWslPid[self.pid] = self
 
-    async def listen(self, async_loop, mode_change: Callable[[int, NvimEntryMode | None], None]):
+    async def listen(self, async_loop):
         match self.platform:
             case NvimListenerPlatform.Win:
-                await self.listen_win(async_loop, mode_change)
+                await self.listen_win(async_loop)
             case NvimListenerPlatform.Wsl:
-                await self.listen_wsl(mode_change)
+                await self.listen_wsl()
             case _:
                 logger.error(f"Bad platform: {self.platform}")
 
-    async def listen_win(self, async_loop, mode_change: Callable[[int, NvimEntryMode | None], None]):
+    async def listen_win(self, async_loop):
         logger.info(f"Starting listener for {self.socket_path}")
         try:
             def read_pipe():
                 with open(self.socket_path, 'r+b', buffering=0) as pipe:
-                    self.query_current_mode_win(async_loop, pipe, mode_change)
-                    keyboard.send("ctrl+alt+shift+f12") # Used to trigger a focus gained notification
+                    self.query_current_mode_win(async_loop, pipe, self.mode_change)
                     unpacker = msgpack.Unpacker(raw=False)
                     while True:
                         chunk = pipe.read(1024)
                         if not chunk:
                             break
                         unpacker.feed(chunk)
-                        self.handle_nvim_msgpack(unpacker, lambda pid, mode: async_loop.call_soon_threadsafe(mode_change, pid, mode))
+                        self.handle_nvim_msgpack(unpacker,
+                                                 lambda pid, mode: async_loop.call_soon_threadsafe(self.mode_change, pid, mode),
+                                                 lambda pid: async_loop.call_soon_threadsafe(self.ack, pid))
             await asyncio.to_thread(read_pipe)
         except Exception as e:
             logger.error(f"Error in {self.socket_path} listener: {e}")
         del NvimWinListeners[self.pid]
         logger.info(f"Listener for {self.socket_path} stopped")
-        async_loop.call_soon_threadsafe(mode_change, self.pid, None)
+        async_loop.call_soon_threadsafe(self.mode_change, self.pid, None)
 
-    async def listen_wsl(self, mode_change: Callable[[int, NvimEntryMode | None], None]):
+    async def listen_wsl(self):
         try:
             process = await asyncio.create_subprocess_exec(
                 "wsl.exe", "-e", "nc", "-U", self.socket_path,
@@ -116,15 +121,14 @@ class NvimListener():
                 creationflags=CREATE_NO_WINDOW,
             )
             logger.info(f"Starting listener for {self.socket_path}")
-            await self.query_current_mode_wsl(process.stdout, process.stdin, mode_change)
-            keyboard.send("ctrl+alt+shift+f12") # Used to trigger a focus gained notification
+            await self.query_current_mode_wsl(process.stdout, process.stdin, self.mode_change)
             unpacker = msgpack.Unpacker(raw=False)
             while True:
                 chunk = await process.stdout.read(1024) # type: ignore
                 if not chunk:
                     break
                 unpacker.feed(chunk)
-                self.handle_nvim_msgpack(unpacker, lambda pid, mode: mode_change(pid, mode))
+                self.handle_nvim_msgpack(unpacker, self.mode_change, self.ack)
         except Exception as e:
             logger.info(f"Error in {self.socket_path} listener: {e}")
         del NvimWslListenersByWslPid[self.pid]
@@ -132,9 +136,9 @@ class NvimListener():
             if self.win_pid in NvimWslListenersByWinPid:
                 del NvimWslListenersByWinPid[self.win_pid]
         logger.info(f"Listener for {self.socket_path} stopped")
-        mode_change(self.pid, None)
+        self.mode_change(self.pid, None)
 
-    def handle_nvim_msgpack(self, unpacker, mode_change):
+    def handle_nvim_msgpack(self, unpacker, mode_change, ack):
         for msg in unpacker:
             if isinstance(msg, list) and len(msg) == 3 and msg[0] == 2:
                 method = msg[1]
@@ -142,9 +146,12 @@ class NvimListener():
                 if method == "mode_change":
                     logger.info(f"{self.socket_path} mode changed to: {args[0]}")
                     self.mode = nvim_entry_mode_from_string(args[0])
+                elif method == "ack": # TODO - Add this to nvim config
+                    logging.info(f"got ack from {self.socket_path}")
+                    ack(self.pid)
                 if self.mode != self.last_reported_mode:
                     self.last_reported_mode = self.mode
-                    mode_change(self.mode)
+                    mode_change(self.pid, self.mode)
 
     def query_current_mode_win(self, async_loop, pipe, mode_change: Callable[[int, NvimEntryMode | None], None]):
         try:
