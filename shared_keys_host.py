@@ -186,13 +186,16 @@ class SharedKeysHost:
             logger.info(f"Foreground window changed to: {self.active_window_process.process}, {self.active_window_process.pid}")
         keys = self.local_keys
         if self.active_window_process.pid and (listener := NvimWslListenersByWinPid.get(self.active_window_process.pid)):
+            logger.info("Found listener in NvimWslListenersByWinPid")
             new_nvim_mode = listener.mode
             keys |= (1 << 30)
         elif self.active_nvim_pids and (listeners := [NvimWinListeners[k] for k in self.active_nvim_pids if k in NvimWinListeners]):
+            logger.info("Found listener in NvimWinListeners")
             new_nvim_mode = listeners[0].mode
             keys |= (1 << 30)
         else:
             if not self.active_nvim_pids and (len(NvimWslListenersByWinPid) < len(NvimWslListenersByWslPid)):
+                logger.info("Sending fish keys in handle_foreground_win_change")
                 keyboard.send("ctrl+alt+shift+f12") # Attempt to trigger response from nvim
             new_nvim_mode = None
             keys &= ~(1 << 30)
@@ -204,7 +207,8 @@ class SharedKeysHost:
             self.tg.create_task(listener.listen(asyncio.get_running_loop())) # type: ignore
 
     def nvim_ack_event(self, listener: NvimListener):
-        if self.active_window_process and self.active_window_process.pid is int:
+        if self.active_window_process and isinstance(self.active_window_process.pid, int):
+            logger.info("got ack event")
             if self.active_window_process.pid not in NvimWslListenersByWinPid:
                 NvimWslListenersByWinPid[self.active_window_process.pid] = listener
                 listener.win_pid = self.active_window_process.pid
@@ -216,6 +220,8 @@ class SharedKeysHost:
             if mode is None:
                 self.active_nvim_pids = None
             self.handle_nvim_mode_change(self.local_keys, mode)
+        # TODO -- think this is needed for win function on starting new nvim in terminal,
+        # but it sends keys every mode change also with wsl - sort that out
         else:
             self.handle_foreground_win_change(self.active_window_process)
 

@@ -68,6 +68,10 @@ async def process_window_events(event_queue: asyncio.Queue, callback: Callable[[
         #     event_queue.task_done()
         #     continue
         if info.pid != last_info.pid or info.title != last_info.title:
+            # if info.pid != last_info.pid:
+            #     logger.info("pid mismatch")
+            # if info.title != last_info.title:
+            #     logging.info("title mismatch")
             callback(info)
             last_info = info
         event_queue.task_done()

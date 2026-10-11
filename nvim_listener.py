@@ -52,7 +52,7 @@ class NvimListener():
         self.ack = ack
         self.mode = NvimEntryMode.Insert
         self.last_reported_mode = None
-        self.win_pid = None
+        self.win_pid: int | None = None
         match self.platform:
             case NvimListenerPlatform.Win:
                 m = WIN_PIPE_FULL_PATH_PATTERN.search(socket_path)
@@ -96,7 +96,8 @@ class NvimListener():
             def read_pipe():
                 with open(self.socket_path, 'r+b', buffering=0) as pipe:
                     self.query_current_mode_win(async_loop, pipe, self.mode_change)
-                    keyboard.send("ctrl+alt+shift+f12") # Attempt to trigger response from nvim
+                    logger.info("Sending fish keys in listen_win")
+                    # keyboard.send("ctrl+alt+shift+f12") # Attempt to trigger response from nvim
                     unpacker = msgpack.Unpacker(raw=False)
                     while True:
                         chunk = pipe.read(1024)
@@ -123,6 +124,7 @@ class NvimListener():
             )
             logger.info(f"Starting listener for {self.socket_path}")
             await self.query_current_mode_wsl(process.stdout, process.stdin, self.mode_change)
+            logger.info("Sending fish keys in listen_wsl")
             keyboard.send("ctrl+alt+shift+f12") # Attempt to trigger response from nvim
             unpacker = msgpack.Unpacker(raw=False)
             while True:
