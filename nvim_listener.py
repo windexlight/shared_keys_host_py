@@ -53,6 +53,7 @@ class NvimListener():
         self.mode = NvimEntryMode.Insert
         self.last_reported_mode = None
         self.win_pid: int | None = None
+        self.ancestry = None
         match self.platform:
             case NvimListenerPlatform.Win:
                 m = WIN_PIPE_FULL_PATH_PATTERN.search(socket_path)
@@ -123,6 +124,7 @@ class NvimListener():
                 creationflags=CREATE_NO_WINDOW,
             )
             logger.info(f"Starting listener for {self.socket_path}")
+            self.ancestry = await self.query_nvim_ancestry_wsl(process.stdout, process.stdin)
             await self.query_current_mode_wsl(process.stdout, process.stdin, self.mode_change)
             logger.info("Sending fish keys in listen_wsl")
             keyboard.send("ctrl+alt+shift+f12") # Attempt to trigger response from nvim
@@ -211,6 +213,33 @@ class NvimListener():
                             return
         except Exception as e:
             logger.error(f"Failed during initial startup mode query to {self.socket_path}: {e}")
+
+    async def query_nvim_ancestry_wsl(self, reader, writer):
+        try:
+            req_id = 2
+            lua_code = "return require('config.winlink').ancestry()"
+            request = [0, req_id, "nvim_exec_lua", [lua_code, []]]
+            writer.write(msgpack.packb(request))
+            unpacker = msgpack.Unpacker(raw=False)
+            while True:
+                chunk = await reader.read(1024)
+                if not chunk:
+                    break
+                unpacker.feed(chunk)
+                for msg in unpacker:
+                    if isinstance(msg, list) and len(msg) == 4 and msg[0] == 1:
+                        if msg[1] == req_id:
+                            error = msg[2]
+                            result = msg[3]
+                            if error:
+                                logger.error(f"Failed to get ancestry from {self.socket_path}: {error}")
+                                result = None
+                            else:
+                                logger.info(f"Got ancestry from {self.socket_path}")
+                            return result
+        except Exception as e:
+            logger.error(f"Failed to get ancestry from {self.socket_path}: {e}")
+        return None
 
 async def watch_wsl_sockets(callback: Callable[[NvimListenerPlatform, NvimInstanceEvent, str], None]):
     wsl_cmd = (
