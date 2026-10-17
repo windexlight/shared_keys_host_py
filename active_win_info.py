@@ -83,12 +83,15 @@ def find_nvim_pid(terminal_pid):
     try:
         terminal_process = psutil.Process(terminal_pid)
         descendants = terminal_process.children(recursive=True)
+        descendant_pids = {terminal_pid}
         for process in descendants:
             try:
+                descendant_pids.add(process.pid)
                 if process.name().lower() == 'nvim.exe':
                     nvims.append(process.pid)
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
+        logger.info(f"Descendant pids: {descendant_pids}")
     except psutil.NoSuchProcess:
         logger.error(f"No running process found with PID {terminal_pid}")
     except psutil.AccessDenied:
