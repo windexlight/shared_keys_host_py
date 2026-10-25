@@ -4,7 +4,6 @@ import sys
 from dataclasses import dataclass
 import logging
 from time import time
-import keyboard
 from active_win_info import process_window_events, windows_event_worker, process_info, find_nvim_pid
 from nvim_listener import (NvimListener, watch_wsl_sockets, watch_windows_pipes, NvimListenerPlatform,
                            NvimInstanceEvent, NvimEntryMode, NvimWinListeners, NvimWslListeners)
