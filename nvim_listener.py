@@ -103,6 +103,10 @@ class NvimListener():
             await asyncio.to_thread(read_pipe)
         except Exception as e:
             logger.error(f"Error in {self.socket_path} listener: {e}")
+        # TODO - consider: don't delete immediately, instead keep around for a bit in case a new instance starts with
+        # this one as the parent (i.e., :restart was used), to allow new child to keep a trace back to this one's win_pid.
+        # Also need to write win_pid for these, of course (currently only doing it for WSL listeners), then need to use
+        # it to match on window focus change.
         del NvimWinListeners[self.pid]
         logger.info(f"Listener for {self.socket_path} stopped")
         async_loop.call_soon_threadsafe(self.mode_change, self.pid, None)
