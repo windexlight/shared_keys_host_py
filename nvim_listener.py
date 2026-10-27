@@ -5,6 +5,8 @@ import re
 from typing import Callable, Dict, Tuple
 from enum import Enum, auto
 import msgpack
+from time import time
+import psutil
 
 logger = logging.getLogger("app_logger")
 
@@ -50,6 +52,9 @@ class NvimListener():
         self.last_reported_mode = None
         self.win_pid: int | None = None
         self.ancestry = None
+        self.stopped = False
+        self.stop_time = 0
+        self.parent = None
         match self.platform:
             case NvimListenerPlatform.Win:
                 m = WIN_PIPE_FULL_PATH_PATTERN.search(socket_path)
@@ -66,11 +71,24 @@ class NvimListener():
             return
         match self.platform:
             case NvimListenerPlatform.Win:
-                if self.pid in NvimWinListeners:
+                if self.pid in NvimWinListeners and not NvimWinListeners[self.pid].stopped:
                     logger.error(f"Listener already exists: {self.pid}")
                     self.platform = NvimListenerPlatform.Unsupported
                 else:
+                    ppid = psutil.Process(self.pid).ppid()
+                    if ppid in NvimWinListeners:
+                        if (not NvimWinListeners[ppid].stopped) or ((time() - NvimWinListeners[ppid].stop_time) < 5.0):
+                            # If our parent had a listener recently, record that here - this allows :restart to work without breaking things
+                            self.parent = NvimWinListeners[ppid]
+                        del NvimWinListeners[ppid]
                     NvimWinListeners[self.pid] = self
+                    # Purge stopped listeners that are too old, so we don't accumulate too many
+                    to_delete = []
+                    for pid, listener in NvimWinListeners.items():
+                        if listener.stopped and ((time() - NvimWinListeners[pid].stop_time) >= 5.0):
+                            to_delete.append(pid)
+                    for pid in to_delete:
+                        del NvimWinListeners[pid]
             case NvimListenerPlatform.Wsl:
                 if self.pid in NvimWslListeners:
                     logger.error(f"Listener already exists: {self.pid}")
@@ -103,11 +121,8 @@ class NvimListener():
             await asyncio.to_thread(read_pipe)
         except Exception as e:
             logger.error(f"Error in {self.socket_path} listener: {e}")
-        # TODO - consider: don't delete immediately, instead keep around for a bit in case a new instance starts with
-        # this one as the parent (i.e., :restart was used), to allow new child to keep a trace back to this one's win_pid.
-        # Also need to write win_pid for these, of course (currently only doing it for WSL listeners), then need to use
-        # it to match on window focus change.
-        del NvimWinListeners[self.pid]
+        self.stopped = True
+        self.stop_time = time()
         logger.info(f"Listener for {self.socket_path} stopped")
         async_loop.call_soon_threadsafe(self.mode_change, self.pid, None)
 
@@ -145,7 +160,16 @@ class NvimListener():
                     self.mode = nvim_entry_mode_from_string(args[0])
                 if self.mode != self.last_reported_mode:
                     self.last_reported_mode = self.mode
-                    mode_change(self.win_pid or self.pid, self.mode)
+                    mode_change(self.find_win_pid() or self.pid, self.mode)
+
+    def find_win_pid(self):
+        if self.win_pid is not None:
+            return self.win_pid
+        else:
+            if self.parent is not None:
+                return self.parent.find_win_pid()
+            else:
+                return None
 
     def query_current_mode_win(self, async_loop, pipe, mode_change: Callable[[int, NvimEntryMode | None], None]):
         try:

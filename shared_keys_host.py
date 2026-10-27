@@ -185,22 +185,37 @@ class SharedKeysHost:
             logger.info(f"Foreground window changed to: {self.active_window_process.process}, {self.active_window_process.pid}")
         keys = self.local_keys
         if self.active_nvim_pids and (listeners := [NvimWinListeners[k] for k in self.active_nvim_pids if k in NvimWinListeners]):
+            # Nvim instance found as decscendant of top level window pid - only happens for Windows nvim, and not if :restart has been used
             logger.info("Found listener in NvimWinListeners")
+            listeners[0].win_pid = self.active_window_process.pid
             new_nvim_mode = listeners[0].mode
             keys |= (1 << 30)
         else:
+            # Nvim instance NOT found as decscendant of top level window pid
             new_nvim_mode = None
-            found = False
+            nvim = None
+            # Look for our top level window pid in WSL nvim ancestries (which have been queried previously)
             for listener in NvimWslListeners.values():
                 if listener.ancestry is not None:
                     for ancestor in listener.ancestry:
                         if ancestor.get("pid") == self.active_window_process.pid:
                             logger.info("Found listener in NvimWslListeners")
-                            listener.win_pid = self.active_window_process.pid
-                            new_nvim_mode = listener.mode
-                            keys |= (1 << 30)
-                            found = True
-            if not found:
+                            nvim = listener
+                            break
+                    if nvim is not None:
+                        break
+            else:
+                # Look for our top level window pid in Windows nvim ancestries (allows :restart to work)
+                for listener in NvimWinListeners.values():
+                    if listener.find_win_pid() == self.active_window_process.pid:
+                        logger.info("Found listener in NvimWinListeners ancestry")
+                        nvim = listener
+                        break
+            if nvim is not None:
+                nvim.win_pid = self.active_window_process.pid
+                new_nvim_mode = nvim.mode
+                keys |= (1 << 30)
+            else:
                 keys &= ~(1 << 30)
         self.handle_nvim_mode_change(keys, new_nvim_mode)
 
