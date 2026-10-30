@@ -206,11 +206,17 @@ class SharedKeysHost:
                         break
             else:
                 # Look for our top level window pid in Windows nvim ancestries (allows :restart to work)
-                for listener in NvimWinListeners.values():
-                    if listener.find_win_pid() == self.active_window_process.pid:
-                        logger.info("Found listener in NvimWinListeners ancestry")
-                        nvim = listener
-                        break
+                to_delete = []
+                for pid, listener in NvimWinListeners.items():
+                    if not listener.stopped:
+                        if listener.find_win_pid() == self.active_window_process.pid:
+                            logger.info("Found listener in NvimWinListeners ancestry")
+                            nvim = listener
+                            break
+                    elif (time() - NvimWinListeners[pid].stop_time) >= 5.0:
+                        to_delete.append(pid)
+                for pid in to_delete:
+                    del NvimWinListeners[pid]
             if nvim is not None:
                 nvim.win_pid = self.active_window_process.pid
                 new_nvim_mode = nvim.mode
