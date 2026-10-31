@@ -110,7 +110,7 @@ class NvimListener():
         try:
             def read_pipe():
                 with open(self.socket_path, 'r+b', buffering=0) as pipe:
-                    self.query_current_mode_win(async_loop, pipe, self.mode_change)
+                    self.init_listener_win(async_loop, pipe, self.mode_change)
                     unpacker = msgpack.Unpacker(raw=False)
                     while True:
                         chunk = pipe.read(1024)
@@ -136,7 +136,7 @@ class NvimListener():
             )
             logger.info(f"Starting listener for {self.socket_path}")
             self.ancestry = await self.query_nvim_ancestry_wsl(process.stdout, process.stdin)
-            await self.query_current_mode_wsl(process.stdout, process.stdin, self.mode_change)
+            await self.init_listener_wsl(process.stdout, process.stdin, self.mode_change)
             unpacker = msgpack.Unpacker(raw=False)
             while True:
                 chunk = await process.stdout.read(1024) # type: ignore
@@ -171,11 +171,25 @@ class NvimListener():
             else:
                 return None
 
-    def query_current_mode_win(self, async_loop, pipe, mode_change: Callable[[int, NvimEntryMode | None], None]):
+    def get_client_info(self, req_id):
+        return [
+            0, req_id, "nvim_set_client_info",
+            [
+                "qmk-host-app",
+                { "major": 0, "minor": 1, "patch": 0, },  # version
+                "remote",  # type
+                {},  # methods
+                {},  # attributes
+            ],
+        ]
+
+    def init_listener_win(self, async_loop, pipe, mode_change: Callable[[int, NvimEntryMode | None], None]):
         try:
             req_id = 1
             request = [0, req_id, "nvim_get_mode", []]
             pipe.write(msgpack.packb(request))
+            pipe.flush()
+            pipe.write(msgpack.packb(self.get_client_info(2)))
             pipe.flush()
             unpacker = msgpack.Unpacker(raw=False)
             while True:
@@ -199,11 +213,12 @@ class NvimListener():
         except Exception as e:
             logger.error(f"Failed during initial startup mode query to {self.socket_path}: {e}")
 
-    async def query_current_mode_wsl(self, reader, writer, mode_change: Callable[[int, NvimEntryMode], None]):
+    async def init_listener_wsl(self, reader, writer, mode_change: Callable[[int, NvimEntryMode], None]):
         try:
             req_id = 1
             request = [0, req_id, "nvim_get_mode", []]
             writer.write(msgpack.packb(request))
+            writer.write(msgpack.packb(self.get_client_info(2)))
             unpacker = msgpack.Unpacker(raw=False)
             while True:
                 chunk = await reader.read(1024)
@@ -228,7 +243,7 @@ class NvimListener():
 
     async def query_nvim_ancestry_wsl(self, reader, writer):
         try:
-            req_id = 2
+            req_id = 3
             lua_code = "return require('config.winlink').ancestry()"
             request = [0, req_id, "nvim_exec_lua", [lua_code, []]]
             writer.write(msgpack.packb(request))
